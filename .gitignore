@@ -1,0 +1,65 @@
+# CMake generated files
+/build/
+/out/
+/install/
+/cmake-build-*/
+/CMakeFiles/
+/Testing/
+/CMakeCache.txt
+/CTestTestfile.cmake
+/cmake_install.cmake
+/compile_commands.json
+/install_manifest.txt
+/Makefile
+/.ninja_deps
+/.ninja_log
+/build.ninja
+/rules.ninja
+
+# Local CMake configuration
+/CMakeUserPresets.json
+
+# Dependency and package-manager output
+/vcpkg_installed/
+/_deps/
+/.cache/
+
+# Visual Studio and MSBuild user state
+/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# Compiler and linker intermediates outside build directories
+*.obj
+*.o
+*.pch
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.ipdb
+*.iobj
+
+# Runtime output
+/bin/
+/lib/
+/logs/
+/captures/
+/profiles/
+
+# IDE and editor-local state
+/.idea/
+/.clangd/
+*.code-workspace
+*.swp
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
