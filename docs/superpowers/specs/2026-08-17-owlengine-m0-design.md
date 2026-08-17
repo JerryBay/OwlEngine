@@ -1,6 +1,6 @@
 # OwlEngine M0 Reproducible Engineering Baseline Design
 
-- Status: Approved direction, pending written-spec review
+- Status: Approved
 - Date: 2026-08-17
 - Parent roadmap: [OwlEngine Roadmap Design](2026-08-17-owlengine-roadmap-design.md)
 - Implementation status: Not started
