@@ -1,6 +1,6 @@
 # OwlEngine Roadmap Design
 
-- Status: Approved direction, pending written-spec review
+- Status: Approved
 - Date: 2026-08-17
 - Project type: Long-lived open-source personal rendering engine
 - Primary goal: Learn modern graphics APIs, RHI design, and modern rendering architecture through production-quality code
