@@ -4,9 +4,9 @@
 
 **Goal:** Build the reproducible Win64 engineering baseline defined by the approved M0 design, ending with a tested SDL3 smoke window and documented clean-clone workflow.
 
-**Architecture:** Create only three production targets: `OwlFoundation`, `OwlPlatform`, and `OwlSandbox`. Keep dependency direction one-way (`OwlSandbox -> OwlPlatform -> OwlFoundation`), hide spdlog and SDL3 from public headers, and obtain SDL3/spdlog/Catch2 through a repository-local pinned vcpkg checkout.
+**Architecture:** Create only three production targets: `OwlFoundation`, `OwlPlatform`, and `OwlSandbox`. Keep dependency direction one-way (`OwlSandbox -> OwlPlatform -> OwlFoundation`), hide spdlog and SDL3 from public headers, and obtain SDL3/spdlog/Catch2 through one repository-local pinned vcpkg checkout. Support VS2022/v143 and VS2026/v145 with explicit presets, separate CMake binary directories, and therefore separate manifest-mode dependency installation trees.
 
-**Tech Stack:** C++20, CMake 3.28+, Visual Studio 2022/MSVC, PowerShell, vcpkg registry release 2026.07.29, SDL3, spdlog, Catch2, CTest, GitHub Actions.
+**Tech Stack:** C++20, CMake 3.28+ for VS2022 and 4.2+ for VS2026, Visual Studio 2022/v143, Visual Studio 2026/v145, PowerShell, vcpkg registry release 2026.07.29, SDL3, spdlog, Catch2, CTest, GitHub Actions.
 
 **Design:** `docs/superpowers/specs/2026-08-17-owlengine-m0-design.md`
 
@@ -19,7 +19,7 @@
 - `.gitignore`: ignore repository-local tool and generated dependency directories.
 - `.clang-format`: define the Owl-owned C++ formatting baseline.
 - `CMakeLists.txt`: define the project, language contract, module order, and test entrypoints.
-- `CMakePresets.json`: define one VS 2022 configure preset and Debug/RelWithDebInfo build/test presets.
+- `CMakePresets.json`: define VS2022 and VS2026 configure presets with isolated output plus Debug/RelWithDebInfo build/test presets for each.
 - `vcpkg.json`: declare only SDL3, spdlog, and Catch2.
 - `vcpkg-configuration.json`: pin the builtin registry and tool checkout to one official release commit.
 - `cmake/OwlOptions.cmake`: own M0 project options.
@@ -64,7 +64,7 @@
 
 ### CI and documentation
 
-- `.github/workflows/build-windows.yml`: VS 2022 Windows configure/build/test matrix.
+- `.github/workflows/build-windows.yml`: VS2022 and VS2026 Windows configure/build/test matrix.
 - `docs/building/windows.md`: prerequisites and supported local workflow.
 - `README.md`: advertise build commands only after final acceptance.
 - `docs/superpowers/specs/2026-08-17-owlengine-m0-design.md`: record M0 implementation completion only after all gates pass.
@@ -89,10 +89,11 @@
 Run:
 
 ```powershell
-cmake --preset windows-msvc
+cmake --preset windows-vs2022
+cmake --preset windows-vs2026
 ```
 
-Expected: nonzero exit with a message that no configure preset named `windows-msvc` exists.
+Expected: both commands return nonzero with messages that the named configure presets do not exist.
 
 - [ ] **Step 2: Extend `.gitignore` for the managed local tool checkout**
 
@@ -236,8 +237,9 @@ Create `scripts/configure.ps1`:
 ```powershell
 [CmdletBinding()]
 param(
-    [ValidateSet('windows-msvc')]
-    [string]$Preset = 'windows-msvc',
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('windows-vs2022', 'windows-vs2026')]
+    [string]$Preset,
 
     [string[]]$CMakeArguments = @()
 )
@@ -245,6 +247,29 @@ param(
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $bootstrapScript = Join-Path $PSScriptRoot 'bootstrap-vcpkg.ps1'
+
+$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+if ($null -eq $cmakeCommand) {
+    throw 'CMake was not found on PATH.'
+}
+
+$cmakeVersionLine = (& cmake --version | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0 -or $cmakeVersionLine -notmatch '^cmake version (?<version>\d+\.\d+\.\d+)') {
+    throw 'Unable to determine the installed CMake version.'
+}
+
+$cmakeVersion = [version]$Matches.version
+$minimumCMakeVersion = if ($Preset -eq 'windows-vs2026') {
+    [version]'4.2.0'
+}
+else {
+    [version]'3.28.0'
+}
+
+if ($cmakeVersion -lt $minimumCMakeVersion) {
+    throw "Preset $Preset requires CMake $minimumCMakeVersion or newer; found $cmakeVersion."
+}
+
 $vcpkgRoot = (& $bootstrapScript).Trim()
 $toolchainFile = Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake'
 
@@ -347,41 +372,87 @@ Create `CMakePresets.json`:
   },
   "configurePresets": [
     {
-      "name": "windows-msvc",
-      "displayName": "Windows x64 - Visual Studio 2022",
-      "generator": "Visual Studio 17 2022",
+      "name": "windows-msvc-base",
+      "hidden": true,
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc",
       "cacheVariables": {
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/windows-msvc",
-        "OWL_BUILD_TESTS": "ON"
+        "OWL_BUILD_TESTS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-vs2022",
+      "displayName": "Windows x64 - Visual Studio 2022",
+      "inherits": "windows-msvc-base",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build/windows-vs2022",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/windows-vs2022",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vs2022/vcpkg_installed"
+      }
+    },
+    {
+      "name": "windows-vs2026",
+      "displayName": "Windows x64 - Visual Studio 2026",
+      "inherits": "windows-msvc-base",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/windows-vs2026",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/windows-vs2026",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vs2026/vcpkg_installed"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc",
+      "name": "windows-vs2022-debug",
+      "configurePreset": "windows-vs2022",
       "configuration": "Debug"
     },
     {
-      "name": "windows-msvc-relwithdebinfo",
-      "configurePreset": "windows-msvc",
+      "name": "windows-vs2022-relwithdebinfo",
+      "configurePreset": "windows-vs2022",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-vs2026-debug",
+      "configurePreset": "windows-vs2026",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-vs2026-relwithdebinfo",
+      "configurePreset": "windows-vs2026",
       "configuration": "RelWithDebInfo"
     }
   ],
   "testPresets": [
     {
-      "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc",
+      "name": "windows-vs2022-debug",
+      "configurePreset": "windows-vs2022",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
     },
     {
-      "name": "windows-msvc-relwithdebinfo",
-      "configurePreset": "windows-msvc",
+      "name": "windows-vs2022-relwithdebinfo",
+      "configurePreset": "windows-vs2022",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-vs2026-debug",
+      "configurePreset": "windows-vs2026",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-vs2026-relwithdebinfo",
+      "configurePreset": "windows-vs2026",
       "configuration": "RelWithDebInfo",
       "output": {
         "outputOnFailure": true
@@ -396,18 +467,22 @@ Create `CMakePresets.json`:
 Run:
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
+cmake --list-presets
+./scripts/configure.ps1 -Preset windows-vs2026
 git -C .tools/vcpkg rev-parse HEAD
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
+cmake --build --preset windows-vs2026-debug
+ctest --preset windows-vs2026-debug
 ```
 
 Expected:
 
-- Configure succeeds and installs only the three declared ports plus their transitive build helpers.
+- The preset list contains `windows-vs2022` and `windows-vs2026`.
+- VS2026 configure succeeds and installs only the three declared ports plus their transitive build helpers into `build/windows-vs2026/vcpkg_installed`.
 - `git rev-parse` prints `9e593bb18ea69cc5095e012465dcd675a822ed0d`.
 - Build succeeds with no production targets yet.
 - CTest reports that no tests were found and returns success.
+
+The VS2022 preset uses the same manifest and pinned tool checkout but installs its v143-built dependencies under `build/windows-vs2022/vcpkg_installed`. Task 7 proves that second path on its matching CI image; Task 8 repeats it on the second developer machine.
 
 - [ ] **Step 9: Commit the bootstrap baseline**
 
@@ -500,7 +575,7 @@ endif()
 Run:
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
+./scripts/configure.ps1 -Preset windows-vs2026
 ```
 
 Expected: configure fails because `engine/foundation/CMakeLists.txt` or the `OwlFoundation` target is not implemented yet.
@@ -622,9 +697,9 @@ owl_enable_warnings(OwlFoundation)
 - [ ] **Step 5: Build and run the focused test**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug --target OwlFoundationTests
-./build/windows-msvc/tests/foundation/Debug/OwlFoundationTests.exe "[build-info]"
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug --target OwlFoundationTests
+./build/windows-vs2026/tests/foundation/Debug/OwlFoundationTests.exe "[build-info]"
 ```
 
 Expected: one Catch2 test case passes and reports no failed assertions.
@@ -747,8 +822,8 @@ target_sources(OwlFoundationTests PRIVATE
 Run:
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug --target OwlFoundationTests
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug --target OwlFoundationTests
 ```
 
 Expected: link fails because `ParseCommandLine` is declared but not defined.
@@ -809,9 +884,9 @@ target_sources(OwlFoundation PRIVATE
 - [ ] **Step 3: Run the focused parser tests and full Debug tests**
 
 ```powershell
-cmake --build --preset windows-msvc-debug --target OwlFoundationTests
-./build/windows-msvc/tests/foundation/Debug/OwlFoundationTests.exe "[command-line]"
-ctest --preset windows-msvc-debug
+cmake --build --preset windows-vs2026-debug --target OwlFoundationTests
+./build/windows-vs2026/tests/foundation/Debug/OwlFoundationTests.exe "[command-line]"
+ctest --preset windows-vs2026-debug
 ```
 
 Expected: five parser cases pass; the complete Debug CTest preset reports zero failures.
@@ -1093,10 +1168,10 @@ Keep the Git revision and `configure_file` block above this target section uncha
 - [ ] **Step 5: Run logging and full Foundation tests**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug --target OwlFoundationTests
-./build/windows-msvc/tests/foundation/Debug/OwlFoundationTests.exe "[logging]"
-ctest --preset windows-msvc-debug
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug --target OwlFoundationTests
+./build/windows-vs2026/tests/foundation/Debug/OwlFoundationTests.exe "[logging]"
+ctest --preset windows-vs2026-debug
 ```
 
 Expected: logging lifecycle test passes; all Foundation CTest cases pass.
@@ -1478,10 +1553,10 @@ owl_enable_warnings(OwlPlatform)
 - [ ] **Step 6: Build and run tests without creating a visible window**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug --target OwlPlatformTests
-./build/windows-msvc/tests/platform/Debug/OwlPlatformTests.exe "[window]"
-ctest --preset windows-msvc-debug
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug --target OwlPlatformTests
+./build/windows-vs2026/tests/platform/Debug/OwlPlatformTests.exe "[window]"
+ctest --preset windows-vs2026-debug
 ```
 
 Expected: Window ownership test passes; no SDL video window opens; full CTest reports zero failures.
@@ -1734,9 +1809,9 @@ int RunSmokeSample()
 - [ ] **Step 5: Build and run the automated CLI tests**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug --target OwlSandbox
-ctest --preset windows-msvc-debug -R OwlSandbox
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug --target OwlSandbox
+ctest --preset windows-vs2026-debug -R OwlSandbox
 ```
 
 Expected: `OwlSandbox.Help` and `OwlSandbox.InvalidArguments` both pass; no window opens during CTest.
@@ -1746,14 +1821,14 @@ Expected: `OwlSandbox.Help` and `OwlSandbox.InvalidArguments` both pass; no wind
 Run once and press Escape:
 
 ```powershell
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample smoke
 $LASTEXITCODE
 ```
 
 Run again and use the window close button:
 
 ```powershell
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample smoke
 $LASTEXITCODE
 ```
 
@@ -1766,7 +1841,7 @@ Expected for each run:
 - [ ] **Step 7: Run full Debug verification and commit**
 
 ```powershell
-ctest --preset windows-msvc-debug
+ctest --preset windows-vs2026-debug
 git add CMakeLists.txt samples tests/cmake
 git commit -m "feat: add M0 smoke sample"
 ```
@@ -1811,7 +1886,7 @@ git diff --check
 
 Expected: formatting completes; `git diff --check` returns success. Review `git diff` to confirm only formatting changes occurred.
 
-- [ ] **Step 3: Add the Visual Studio 2022 CI workflow**
+- [ ] **Step 3: Add the dual-toolchain Windows CI workflow**
 
 Create `.github/workflows/build-windows.yml`:
 
@@ -1829,7 +1904,23 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-2022
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Visual Studio 2022
+            runner: windows-2022
+            configurePreset: windows-vs2022
+            debugPreset: windows-vs2022-debug
+            relWithDebInfoPreset: windows-vs2022-relwithdebinfo
+          - name: Visual Studio 2026
+            runner: windows-2025-vs2026
+            configurePreset: windows-vs2026
+            debugPreset: windows-vs2026-debug
+            relWithDebInfoPreset: windows-vs2026-relwithdebinfo
 
     steps:
       - name: Checkout
@@ -1839,27 +1930,27 @@ jobs:
         shell: pwsh
         run: >-
           ./scripts/configure.ps1
-          -Preset windows-msvc
+          -Preset '${{ matrix.configurePreset }}'
           -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
 
       - name: Build Debug
         shell: pwsh
-        run: cmake --build --preset windows-msvc-debug
+        run: cmake --build --preset '${{ matrix.debugPreset }}'
 
       - name: Test Debug
         shell: pwsh
-        run: ctest --preset windows-msvc-debug
+        run: ctest --preset '${{ matrix.debugPreset }}'
 
       - name: Build RelWithDebInfo
         shell: pwsh
-        run: cmake --build --preset windows-msvc-relwithdebinfo
+        run: cmake --build --preset '${{ matrix.relWithDebInfoPreset }}'
 
       - name: Test RelWithDebInfo
         shell: pwsh
-        run: ctest --preset windows-msvc-relwithdebinfo
+        run: ctest --preset '${{ matrix.relWithDebInfoPreset }}'
 ```
 
-Use `windows-2022` deliberately: it supplies Visual Studio 2022. Do not use `windows-latest`, which has moved to the Visual Studio 2026 image.
+Use explicit runner labels. `windows-2022` supplies VS2022/v143 and `windows-2025-vs2026` supplies VS2026/v145. Do not use `windows-latest`; a moving label would weaken the toolchain contract.
 
 - [ ] **Step 4: Add exact Windows prerequisites and commands**
 
@@ -1872,36 +1963,49 @@ Create `docs/building/windows.md`:
 
 - 64-bit Windows 10 or Windows 11
 - Git
-- CMake 3.28 or newer available on `PATH`
-- Visual Studio 2022 with the Desktop development with C++ workload
+- CMake 3.28 or newer for Visual Studio 2022
+- CMake 4.2 or newer for Visual Studio 2026
+- Visual Studio 2022 17.14+ with v143, or Visual Studio 2026 18.0+ with v145
+- The Desktop development with C++ workload for the selected Visual Studio version
 - Network access during the first dependency bootstrap
 
 OwlEngine uses a repository-local pinned vcpkg checkout. A global vcpkg installation and
 `VCPKG_ROOT` are not required.
+
+Both Visual Studio versions use the same `vcpkg.json`, registry baseline, and `.tools/vcpkg`
+checkout. Their compiled dependencies remain separate under each CMake binary directory:
+`build/windows-vs2022/vcpkg_installed` and `build/windows-vs2026/vcpkg_installed`.
 
 ## Configure
 
 From the repository root:
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
+# Visual Studio 2022
+./scripts/configure.ps1 -Preset windows-vs2022
+
+# Visual Studio 2026
+./scripts/configure.ps1 -Preset windows-vs2026
 ```
 
 The script clones the pinned vcpkg revision into `.tools/vcpkg`, bootstraps vcpkg, installs
-the manifest dependencies, and configures `build/windows-msvc`.
+the manifest dependencies into the selected build tree, and configures that tree. Run only
+the preset matching the Visual Studio version installed on the current machine.
 
 ## Build
 
 ```powershell
-cmake --build --preset windows-msvc-debug
-cmake --build --preset windows-msvc-relwithdebinfo
+# Replace vs2026 with vs2022 on the VS2022 workstation.
+cmake --build --preset windows-vs2026-debug
+cmake --build --preset windows-vs2026-relwithdebinfo
 ```
 
 ## Test
 
 ```powershell
-ctest --preset windows-msvc-debug
-ctest --preset windows-msvc-relwithdebinfo
+# Replace vs2026 with vs2022 on the VS2022 workstation.
+ctest --preset windows-vs2026-debug
+ctest --preset windows-vs2026-relwithdebinfo
 ```
 
 CTest verifies CPU behavior and command-line behavior. It does not open a GUI window.
@@ -1909,7 +2013,8 @@ CTest verifies CPU behavior and command-line behavior. It does not open a GUI wi
 ## Run the Visible Smoke Sample
 
 ```powershell
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+# Use build/windows-vs2022 on the VS2022 workstation.
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample smoke
 ```
 
 The sample opens a resizable window. Press Escape or close the window; a successful run
@@ -1920,39 +2025,42 @@ returns exit code zero.
 Resolve the intended build directory before deleting it:
 
 ```powershell
-$buildDirectory = Resolve-Path -LiteralPath './build/windows-msvc'
+$preset = 'windows-vs2026' # Use windows-vs2022 on the VS2022 workstation.
+$buildDirectory = Resolve-Path -LiteralPath "./build/$preset"
 $repositoryRoot = Resolve-Path -LiteralPath '.'
 if ($buildDirectory.Path.StartsWith($repositoryRoot.Path)) {
     Remove-Item -LiteralPath $buildDirectory.Path -Recurse -Force
 }
-./scripts/configure.ps1 -Preset windows-msvc
+./scripts/configure.ps1 -Preset $preset
 ```
 
-Deleting `build/windows-msvc` does not delete downloaded vcpkg tools or the dependency
-binary cache. Delete `.tools/vcpkg` only when the bootstrap script reports that the managed
-checkout is dirty or corrupt.
+Deleting one build tree also deletes only that toolchain's `vcpkg_installed` tree. It does
+not delete the shared `.tools/vcpkg` checkout or the user-level vcpkg binary cache. Delete
+`.tools/vcpkg` only when the bootstrap script reports that the managed checkout is dirty or
+corrupt.
 
 ## Common Failures
 
-- `cmake` not found: install CMake 3.28 or newer and reopen PowerShell.
-- Visual Studio generator not found: install Visual Studio 2022 and its Desktop development
-  with C++ workload.
+- `cmake` not found or too old: install CMake 3.28+ for VS2022 or 4.2+ for VS2026, then
+  reopen PowerShell.
+- Visual Studio generator not found: install the Visual Studio version named by the preset
+  and its Desktop development with C++ workload.
 - vcpkg clone or package download fails: verify GitHub/network access, then rerun configure.
 - managed vcpkg checkout is dirty: remove only `.tools/vcpkg`, then rerun configure.
 - CTest passes but no window was tested: run the visible smoke command manually.
 ````
 
-- [ ] **Step 5: Run both local configurations with warnings as errors**
+- [ ] **Step 5: Run both VS2026 local configurations with warnings as errors**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-cmake --build --preset windows-msvc-relwithdebinfo
-ctest --preset windows-msvc-relwithdebinfo
+./scripts/configure.ps1 -Preset windows-vs2026 -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
+cmake --build --preset windows-vs2026-debug
+ctest --preset windows-vs2026-debug
+cmake --build --preset windows-vs2026-relwithdebinfo
+ctest --preset windows-vs2026-relwithdebinfo
 ```
 
-Expected: both builds succeed and both CTest presets report zero failures.
+Expected: both VS2026 builds succeed and both CTest presets report zero failures. Task 8 publishes this commit and requires equivalent VS2022 CI evidence before M0 can be accepted.
 
 - [ ] **Step 6: Commit CI and documentation**
 
@@ -1990,12 +2098,12 @@ Expected: clone succeeds into a newly generated directory, so no existing path i
 - [ ] **Step 3: Repeat the complete clean-clone workflow**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-cmake --build --preset windows-msvc-relwithdebinfo
-ctest --preset windows-msvc-relwithdebinfo
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug
+ctest --preset windows-vs2026-debug
+cmake --build --preset windows-vs2026-relwithdebinfo
+ctest --preset windows-vs2026-relwithdebinfo
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample smoke
 $LASTEXITCODE
 ```
 
@@ -2016,14 +2124,44 @@ git status --short
 
 Expected: no output.
 
-- [ ] **Step 5: Update README only after local acceptance succeeds**
+- [ ] **Step 5: Publish the implementation commit and inspect dual-toolchain CI**
+
+Request explicit authorization before pushing. After authorization:
+
+```powershell
+git push origin master
+```
+
+Inspect the `Windows Build` workflow and require both toolchain jobs and all ten configure/build/test steps to pass from a cache miss. The push also makes the exact implementation commit available for clean-clone testing on the VS2022 workstation. A local build is not evidence that GitHub Actions passed.
+
+- [ ] **Step 6: Repeat clean-clone acceptance on the VS2022 workstation**
+
+From an existing OwlEngine checkout on the VS2022 machine, run:
+
+```powershell
+$sourceRepository = git remote get-url origin
+$cleanRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("OwlEngine-m0-vs2022-" + [guid]::NewGuid())
+git clone $sourceRepository $cleanRoot
+Set-Location $cleanRoot
+./scripts/configure.ps1 -Preset windows-vs2022
+cmake --build --preset windows-vs2022-debug
+ctest --preset windows-vs2022-debug
+cmake --build --preset windows-vs2022-relwithdebinfo
+ctest --preset windows-vs2022-relwithdebinfo
+./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample smoke
+$LASTEXITCODE
+```
+
+Expected: the same clean-clone, two-configuration, zero-test-failure, responsive-window, and zero-exit-code evidence as VS2026. Confirm that dependencies were installed under `build/windows-vs2022/vcpkg_installed`; no v145 binary is copied into this tree.
+
+- [ ] **Step 7: Update README only after both local acceptances succeed**
 
 Replace the two paragraphs under `## Project Status` with:
 
 ```markdown
 OwlEngine M0 is implemented. The repository provides a reproducible Win64 configure,
-build, test, and SDL3 smoke-sample workflow using Visual Studio 2022, CMake Presets, and a
-repository-local pinned vcpkg checkout.
+build, test, and SDL3 smoke-sample workflow using Visual Studio 2022/v143 or Visual Studio
+2026/v145, CMake Presets, and one repository-local pinned vcpkg checkout.
 
 See [Building OwlEngine on Windows](docs/building/windows.md) for prerequisites and exact
 commands.
@@ -2035,24 +2173,15 @@ Add a `## Quick Start` section immediately after Project Status:
 ## Quick Start
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+$preset = 'windows-vs2026' # Use windows-vs2022 on the VS2022 workstation.
+./scripts/configure.ps1 -Preset $preset
+cmake --build --preset "$preset-debug"
+ctest --preset "$preset-debug"
+& "./build/$preset/bin/Debug/OwlSandbox.exe" --sample smoke
 ```
 ````
 
-- [ ] **Step 6: Trigger and inspect the real GitHub Actions workflow**
-
-Request explicit authorization before pushing. After authorization:
-
-```powershell
-git push origin master
-```
-
-Inspect the `Windows Build` workflow and require all six configure/build/test steps to pass from a cache miss. A local build is not evidence that GitHub Actions passed.
-
-- [ ] **Step 7: Mark the M0 design complete only after CI passes**
+- [ ] **Step 8: Mark the M0 design complete only after CI passes**
 
 Change the header in `docs/superpowers/specs/2026-08-17-owlengine-m0-design.md` to:
 
@@ -2063,14 +2192,14 @@ Change the header in `docs/superpowers/specs/2026-08-17-owlengine-m0-design.md` 
 - Implementation status: Complete
 ```
 
-- [ ] **Step 8: Run final repository verification**
+- [ ] **Step 9: Run final repository verification**
 
 ```powershell
-./scripts/configure.ps1 -Preset windows-msvc -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-cmake --build --preset windows-msvc-relwithdebinfo
-ctest --preset windows-msvc-relwithdebinfo
+./scripts/configure.ps1 -Preset windows-vs2026 -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
+cmake --build --preset windows-vs2026-debug
+ctest --preset windows-vs2026-debug
+cmake --build --preset windows-vs2026-relwithdebinfo
+ctest --preset windows-vs2026-relwithdebinfo
 rg -n "Vulkan|D3D12|RHI|RenderGraph|Renderer" engine samples tests
 git diff --check
 git status --short
@@ -2085,7 +2214,7 @@ Expected:
 - `git diff --check` succeeds.
 - `git status --short` shows only the intended README and M0 status edits.
 
-- [ ] **Step 9: Commit the accepted M0 baseline**
+- [ ] **Step 10: Commit the accepted M0 baseline**
 
 ```powershell
 git add README.md docs/superpowers/specs/2026-08-17-owlengine-m0-design.md
@@ -2094,7 +2223,7 @@ git commit -m "docs: mark M0 engineering baseline complete"
 
 Do not begin M1 Vulkan work in this commit. M1 starts with its own design and implementation plan.
 
-- [ ] **Step 10: Push the final M0 status and verify CI at the final HEAD**
+- [ ] **Step 11: Push the final M0 status and verify CI at the final HEAD**
 
 With explicit push authorization still in effect:
 

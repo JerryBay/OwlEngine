@@ -16,20 +16,20 @@ The intended local acceptance path is:
 ```powershell
 git clone <repository-url>
 Set-Location OwlEngine
-./scripts/configure.ps1 -Preset windows-msvc
-cmake --build --preset windows-msvc-debug
-ctest --preset windows-msvc-debug
-./build/windows-msvc/bin/Debug/OwlSandbox.exe --sample smoke
+./scripts/configure.ps1 -Preset windows-vs2026
+cmake --build --preset windows-vs2026-debug
+ctest --preset windows-vs2026-debug
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample smoke
 ```
 
-The configure script is part of the supported workflow. It bootstraps the pinned repository-local vcpkg toolchain before invoking the selected CMake configure preset.
+The example uses the current primary workstation. A Visual Studio 2022 workstation uses the equivalent `windows-vs2022` presets and `build/windows-vs2022` output directory. The configure script is part of the supported workflow. It bootstraps the pinned repository-local vcpkg toolchain before invoking the explicitly selected CMake configure preset.
 
 ## 2. Scope
 
 ### 2.1 Included
 
 - C++20 project baseline
-- Win64 and Visual Studio 2022/MSVC primary toolchain
+- Win64 with Visual Studio 2022/v143 and Visual Studio 2026/v145 toolchains
 - CMake targets and presets
 - Pinned vcpkg manifest dependencies
 - Repository-local dependency bootstrap
@@ -223,6 +223,7 @@ Vulkan headers, Vulkan loader, Vulkan Memory Allocator, GLM, DXC, ImGui, and ass
 - The repository records the vcpkg tool revision consumed by the bootstrap script.
 - Dependency version changes are intentional commits with configure/build/test evidence.
 - Floating branches and unpinned archives are not allowed in supported configure paths.
+- Both MSVC generations consume the same manifest and registry baseline; dependencies are not declared or versioned twice.
 
 ### 6.3 Bootstrap behavior
 
@@ -239,31 +240,40 @@ Vulkan headers, Vulkan loader, Vulkan Memory Allocator, GLM, DXC, ImGui, and ass
 
 The scripts do not install Visual Studio, Git, CMake, or system drivers. These prerequisites are detected and documented.
 
+Each configure preset has a distinct CMake binary directory. In manifest mode, vcpkg consequently creates a distinct `vcpkg_installed` tree for VS2022/v143 and VS2026/v145. The repository-local vcpkg checkout and binary cache may be shared; compiler identity participates in vcpkg's ABI hash, so cached binaries from one toolset are not consumed as if they belonged to the other.
+
 ## 7. CMake Design
 
 ### 7.1 Minimum contract
 
-- CMake 3.28 or newer
+- CMake 3.28 or newer for the VS2022 preset
+- CMake 4.2 or newer for the VS2026 preset
 - C++20 required, with compiler extensions disabled
-- Visual Studio 2022/MSVC primary local toolchain
+- Visual Studio 2022 17.14 or newer with v143 is the minimum supported Windows toolchain
+- Visual Studio 2026 18.0 or newer with v145 is the primary development toolchain
 - 64-bit Windows only in M0
 - Static Owl libraries; no shared-library option in M0
 
 ### 7.2 Presets
 
-Supported configure preset:
+Supported configure presets:
 
-- `windows-msvc`: Visual Studio 17 2022, x64, repository-local binary directory
+- `windows-vs2022`: Visual Studio 17 2022, x64, `build/windows-vs2022`
+- `windows-vs2026`: Visual Studio 18 2026, x64, `build/windows-vs2026`
 
 Supported build presets:
 
-- `windows-msvc-debug`
-- `windows-msvc-relwithdebinfo`
+- `windows-vs2022-debug`
+- `windows-vs2022-relwithdebinfo`
+- `windows-vs2026-debug`
+- `windows-vs2026-relwithdebinfo`
 
 Supported test presets:
 
-- `windows-msvc-debug`
-- `windows-msvc-relwithdebinfo`
+- `windows-vs2022-debug`
+- `windows-vs2022-relwithdebinfo`
+- `windows-vs2026-debug`
+- `windows-vs2026-relwithdebinfo`
 
 `CMakeUserPresets.json` remains ignored for developer-local overrides. Supported workflows cannot depend on it.
 
@@ -377,7 +387,7 @@ The visible `--sample smoke` run is a required local acceptance step. The result
 
 ## 11. Continuous Integration
 
-The initial GitHub Actions workflow runs on a supported Windows image and performs:
+The initial GitHub Actions workflow runs a two-entry toolchain matrix on the explicit `windows-2022` and `windows-2025-vs2026` images. Each entry performs:
 
 1. Checkout
 2. Dependency bootstrap and CMake configure
@@ -386,9 +396,9 @@ The initial GitHub Actions workflow runs on a supported Windows image and perfor
 5. RelWithDebInfo build
 6. RelWithDebInfo CTest run with failure output
 
-CI may cache downloaded vcpkg artifacts, but cache hits are not required for correctness. A cache miss must still produce a complete build.
+CI may cache downloaded vcpkg artifacts, but cache hits are not required for correctness. A cache miss must still produce a complete build. The same manifest is used by both jobs; their build directories and vcpkg installation trees remain separate.
 
-M0 CI does not claim GPU, Vulkan, GUI, Android, packaging, or multi-compiler coverage.
+M0 CI proves two MSVC toolset generations, not separate compiler families. It does not claim GPU, Vulkan, GUI, Android, packaging, clang-cl, or GCC coverage.
 
 ## 12. Documentation
 
@@ -408,15 +418,15 @@ README keeps its current project-status warning until M0 passes the clean-clone 
 M0 is complete only when all of the following are true:
 
 1. The committed repository contains only the M0 targets and dependencies defined in this spec.
-2. `scripts/configure.ps1 -Preset windows-msvc` succeeds from a fresh clone with documented prerequisites.
-3. Debug and RelWithDebInfo builds succeed through their named presets.
-4. Both CTest presets report zero failures.
+2. `scripts/configure.ps1 -Preset windows-vs2022` and `scripts/configure.ps1 -Preset windows-vs2026` each succeed from a compatible fresh environment with documented prerequisites.
+3. Debug and RelWithDebInfo builds succeed for both supported toolchains through their named presets.
+4. All four CTest presets report zero failures.
 5. `OwlSandbox --help` succeeds without initializing a window.
 6. `OwlSandbox --sample smoke` opens the specified responsive window and exits cleanly through Escape and the close button.
 7. Logs report correct build and platform information.
 8. Owl-owned targets compile cleanly under the configured warning policy.
-9. GitHub Actions passes from a dependency-cache miss.
-10. A second clean directory or machine repeats configure, build, test, and visible run without source edits or absolute-path fixes.
+9. Both GitHub Actions toolchain jobs pass from a dependency-cache miss.
+10. The VS2022 and VS2026 developer machines each repeat configure, build, test, and visible run without source edits or absolute-path fixes.
 11. README build instructions are updated only after the preceding evidence exists.
 12. No Vulkan, RHI, Renderer, Shader, Material, Asset, or Editor implementation has entered the change.
 
@@ -430,11 +440,11 @@ Cost: initial download time and local disk usage.
 
 Reason accepted: it gives the supported configure script a known tool revision and avoids relying on a mutable machine-global installation.
 
-### Visual Studio generator as the only M0 generator
+### Two Visual Studio generators in M0
 
-Cost: the first milestone does not prove Ninja or clang-cl support.
+Cost: CI time, local dependency binaries, build directories, and acceptance work are duplicated across v143 and v145.
 
-Reason accepted: one fully reproducible primary path is more valuable than multiple partially verified paths. Additional compilers require their own milestone evidence.
+Reason accepted: the project is actively developed on one VS2022 machine and one VS2026 machine, so both paths solve an immediate reproducibility requirement. They share source, dependency declarations, and architecture; separate compiler families still require their own milestone evidence.
 
 ### SDL3 behind OwlPlatform
 
