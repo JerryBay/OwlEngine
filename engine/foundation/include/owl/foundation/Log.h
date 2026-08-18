@@ -17,8 +17,5 @@ enum class LogLevel
 void InitializeLogging();
 void ShutdownLogging();
 void SetLogLevel(LogLevel level);
-void LogMessage(
-    LogLevel level,
-    std::string_view category,
-    std::string_view message);
-}
+void LogMessage(LogLevel level, std::string_view category, std::string_view message);
+} // namespace owl::foundation

@@ -15,4 +15,4 @@ struct BuildInfo
 };
 
 [[nodiscard]] BuildInfo GetBuildInfo() noexcept;
-}
+} // namespace owl::foundation

@@ -2,8 +2,7 @@
 
 namespace owl::foundation
 {
-ParsedCommandLine ParseCommandLine(
-    const std::span<const std::string_view> arguments)
+ParsedCommandLine ParseCommandLine(const std::span<const std::string_view> arguments)
 {
     if (arguments.empty())
     {
@@ -23,8 +22,7 @@ ParsedCommandLine ParseCommandLine(
         };
     }
 
-    if (arguments.size() == 2 && arguments[0] == "--sample" &&
-        arguments[1] == "smoke")
+    if (arguments.size() == 2 && arguments[0] == "--sample" && arguments[1] == "smoke")
     {
         return ParsedCommandLine{.command = Command::Smoke};
     }
@@ -34,4 +32,4 @@ ParsedCommandLine ParseCommandLine(
         .error = "unknown command line",
     };
 }
-}
+} // namespace owl::foundation

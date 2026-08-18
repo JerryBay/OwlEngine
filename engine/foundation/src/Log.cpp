@@ -49,7 +49,7 @@ std::shared_ptr<spdlog::logger> GetOrCreateLogger()
     }
     return logger;
 }
-}
+} // namespace
 
 void InitializeLogging()
 {
@@ -72,13 +72,10 @@ void SetLogLevel(const LogLevel level)
     GetOrCreateLogger()->set_level(ToSpdlogLevel(level));
 }
 
-void LogMessage(
-    const LogLevel level,
-    const std::string_view category,
-    const std::string_view message)
+void LogMessage(const LogLevel level, const std::string_view category,
+                const std::string_view message)
 {
-    const std::string formatted =
-        "[" + std::string(category) + "] " + std::string(message);
+    const std::string formatted = "[" + std::string(category) + "] " + std::string(message);
     GetOrCreateLogger()->log(ToSpdlogLevel(level), formatted);
 }
-}
+} // namespace owl::foundation

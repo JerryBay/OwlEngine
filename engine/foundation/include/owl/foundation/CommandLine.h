@@ -19,6 +19,5 @@ struct ParsedCommandLine
     std::string error;
 };
 
-[[nodiscard]] ParsedCommandLine ParseCommandLine(
-    std::span<const std::string_view> arguments);
-}
+[[nodiscard]] ParsedCommandLine ParseCommandLine(std::span<const std::string_view> arguments);
+} // namespace owl::foundation

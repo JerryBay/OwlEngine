@@ -1932,7 +1932,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Configure
         shell: pwsh
@@ -1958,7 +1958,7 @@ jobs:
         run: ctest --preset '${{ matrix.relWithDebInfoPreset }}'
 ```
 
-Use explicit runner labels. `windows-2022` supplies VS2022/v143 and `windows-2025-vs2026` supplies VS2026/v145. Do not use `windows-latest`; a moving label would weaken the toolchain contract.
+Use explicit runner labels. `windows-2022` supplies VS2022/v143 and `windows-2025-vs2026` supplies VS2026/v145. Do not use `windows-latest`; a moving label would weaken the toolchain contract. The runner labels and `actions/checkout@v7` were reverified against their official repositories on 2026-08-18 before Task 7 implementation.
 
 - [ ] **Step 4: Add exact Windows prerequisites and commands**
 

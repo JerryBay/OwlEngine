@@ -15,4 +15,4 @@ BuildInfo GetBuildInfo() noexcept
         .architecture = OWL_TARGET_ARCHITECTURE,
     };
 }
-}
+} // namespace owl::foundation

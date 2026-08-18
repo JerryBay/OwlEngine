@@ -13,10 +13,7 @@ namespace owl::platform
 {
 struct Window::Impl
 {
-    explicit Impl(SDL_Window* window) noexcept
-        : window(window)
-    {
-    }
+    explicit Impl(SDL_Window* window) noexcept : window(window) {}
 
     ~Impl()
     {
@@ -34,19 +31,14 @@ Window::~Window() = default;
 Window::Window(Window&& other) noexcept = default;
 Window& Window::operator=(Window&& other) noexcept = default;
 
-Window::Window(std::unique_ptr<Impl> impl) noexcept
-    : impl_(std::move(impl))
-{
-}
+Window::Window(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 bool Window::IsValid() const noexcept
 {
     return impl_ != nullptr && impl_->window != nullptr;
 }
 
-std::optional<Window> Platform::CreateWindow(
-    const WindowDesc& desc,
-    std::string& error) const
+std::optional<Window> Platform::CreateWindow(const WindowDesc& desc, std::string& error) const
 {
     if (!initialized_)
     {
@@ -63,11 +55,7 @@ std::optional<Window> Platform::CreateWindow(
         flags |= SDL_WINDOW_RESIZABLE;
     }
 
-    SDL_Window* handle = SDL_CreateWindow(
-        desc.title.c_str(),
-        desc.width,
-        desc.height,
-        flags);
+    SDL_Window* handle = SDL_CreateWindow(desc.title.c_str(), desc.width, desc.height, flags);
 
     if (handle == nullptr)
     {
@@ -78,4 +66,4 @@ std::optional<Window> Platform::CreateWindow(
     error.clear();
     return Window{std::make_unique<Window::Impl>(handle)};
 }
-}
+} // namespace owl::platform

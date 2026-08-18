@@ -9,10 +9,7 @@ namespace owl::platform
 {
 Platform::Platform() noexcept = default;
 
-Platform::Platform(const bool initialized) noexcept
-    : initialized_(initialized)
-{
-}
+Platform::Platform(const bool initialized) noexcept : initialized_(initialized) {}
 
 Platform::~Platform()
 {
@@ -57,8 +54,7 @@ EventPumpResult Platform::PumpEvents() const noexcept
     SDL_Event event{};
     while (SDL_PollEvent(&event))
     {
-        if (event.type == SDL_EVENT_QUIT ||
-            event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+        if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
         {
             return EventPumpResult::Quit;
         }
@@ -74,9 +70,8 @@ EventPumpResult Platform::PumpEvents() const noexcept
 
 std::string Platform::SdlVersion() const
 {
-    return std::to_string(SDL_MAJOR_VERSION) + "." +
-        std::to_string(SDL_MINOR_VERSION) + "." +
-        std::to_string(SDL_MICRO_VERSION);
+    return std::to_string(SDL_MAJOR_VERSION) + "." + std::to_string(SDL_MINOR_VERSION) + "." +
+           std::to_string(SDL_MICRO_VERSION);
 }
 
 std::string Platform::VideoDriver() const
@@ -84,4 +79,4 @@ std::string Platform::VideoDriver() const
     const char* driver = SDL_GetCurrentVideoDriver();
     return driver != nullptr ? std::string{driver} : std::string{"unknown"};
 }
-}
+} // namespace owl::platform

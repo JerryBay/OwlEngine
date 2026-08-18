@@ -9,14 +9,13 @@
 
 namespace
 {
-void PrintHelp()
-{
-    std::cout
-        << "OwlSandbox\n"
-        << "  --help          Show this help\n"
-        << "  --sample smoke  Run the M0 SDL3 smoke sample\n";
-}
-}
+    void PrintHelp()
+    {
+        std::cout << "OwlSandbox\n"
+                  << "  --help          Show this help\n"
+                  << "  --sample smoke  Run the M0 SDL3 smoke sample\n";
+    }
+} // namespace
 
 int main(const int argc, char* argv[])
 {
@@ -28,8 +27,7 @@ int main(const int argc, char* argv[])
     }
 
     const owl::foundation::ParsedCommandLine parsed =
-        owl::foundation::ParseCommandLine(
-            std::span<const std::string_view>{arguments});
+        owl::foundation::ParseCommandLine(std::span<const std::string_view>{arguments});
 
     switch (parsed.command)
     {

@@ -23,7 +23,7 @@ enum class EventPumpResult
 
 class Platform
 {
-public:
+  public:
     Platform() noexcept;
     ~Platform();
 
@@ -35,17 +35,16 @@ public:
 
     [[nodiscard]] static std::optional<Platform> Create(std::string& error);
 
-    [[nodiscard]] std::optional<Window> CreateWindow(
-        const WindowDesc& desc,
-        std::string& error) const;
+    [[nodiscard]] std::optional<Window> CreateWindow(const WindowDesc& desc,
+                                                     std::string& error) const;
 
     [[nodiscard]] EventPumpResult PumpEvents() const noexcept;
     [[nodiscard]] std::string SdlVersion() const;
     [[nodiscard]] std::string VideoDriver() const;
 
-private:
+  private:
     explicit Platform(bool initialized) noexcept;
 
     bool initialized_ = false;
 };
-}
+} // namespace owl::platform

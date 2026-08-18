@@ -26,7 +26,7 @@ void LogBuildInformation()
     LogMessage(LogLevel::Info, "Build", "OS: " + std::string(info.operatingSystem));
     LogMessage(LogLevel::Info, "Build", "Architecture: " + std::string(info.architecture));
 }
-}
+} // namespace
 
 int RunSmokeSample()
 {
@@ -37,8 +37,7 @@ int RunSmokeSample()
     LogBuildInformation();
 
     std::string error;
-    std::optional<owl::platform::Platform> platform =
-        owl::platform::Platform::Create(error);
+    std::optional<owl::platform::Platform> platform = owl::platform::Platform::Create(error);
     if (!platform)
     {
         LogMessage(LogLevel::Error, "Platform", error);
@@ -56,8 +55,7 @@ int RunSmokeSample()
         .resizable = true,
     };
 
-    std::optional<owl::platform::Window> window =
-        platform->CreateWindow(windowDesc, error);
+    std::optional<owl::platform::Window> window = platform->CreateWindow(windowDesc, error);
     if (!window)
     {
         LogMessage(LogLevel::Error, "Platform", error);
@@ -66,10 +64,7 @@ int RunSmokeSample()
         return 3;
     }
 
-    LogMessage(
-        LogLevel::Info,
-        "Smoke",
-        "Window created; press Escape or close the window.");
+    LogMessage(LogLevel::Info, "Smoke", "Window created; press Escape or close the window.");
 
     while (platform->PumpEvents() == owl::platform::EventPumpResult::Continue)
     {
@@ -82,4 +77,4 @@ int RunSmokeSample()
     owl::foundation::ShutdownLogging();
     return 0;
 }
-}
+} // namespace owl::sandbox

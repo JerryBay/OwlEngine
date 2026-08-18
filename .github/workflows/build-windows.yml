@@ -1,0 +1,57 @@
+name: Windows Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Visual Studio 2022
+            runner: windows-2022
+            configurePreset: windows-vs2022
+            debugPreset: windows-vs2022-debug
+            relWithDebInfoPreset: windows-vs2022-relwithdebinfo
+          - name: Visual Studio 2026
+            runner: windows-2025-vs2026
+            configurePreset: windows-vs2026
+            debugPreset: windows-vs2026-debug
+            relWithDebInfoPreset: windows-vs2026-relwithdebinfo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure
+        shell: pwsh
+        run: >-
+          ./scripts/configure.ps1
+          -Preset '${{ matrix.configurePreset }}'
+          -CMakeArguments '-DOWL_WARNINGS_AS_ERRORS=ON'
+
+      - name: Build Debug
+        shell: pwsh
+        run: cmake --build --preset '${{ matrix.debugPreset }}'
+
+      - name: Test Debug
+        shell: pwsh
+        run: ctest --preset '${{ matrix.debugPreset }}'
+
+      - name: Build RelWithDebInfo
+        shell: pwsh
+        run: cmake --build --preset '${{ matrix.relWithDebInfoPreset }}'
+
+      - name: Test RelWithDebInfo
+        shell: pwsh
+        run: ctest --preset '${{ matrix.relWithDebInfoPreset }}'

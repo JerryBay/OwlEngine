@@ -8,7 +8,7 @@ class Platform;
 
 class Window
 {
-public:
+  public:
     Window() noexcept;
     ~Window();
 
@@ -20,7 +20,7 @@ public:
 
     [[nodiscard]] bool IsValid() const noexcept;
 
-private:
+  private:
     friend class Platform;
 
     struct Impl;
@@ -28,4 +28,4 @@ private:
 
     std::unique_ptr<Impl> impl_;
 };
-}
+} // namespace owl::platform
