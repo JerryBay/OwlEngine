@@ -11,6 +11,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_subdirectory(engine/foundation)
+
 if(OWL_BUILD_TESTS)
     enable_testing()
+    find_package(Catch2 3 CONFIG REQUIRED)
+    include(Catch)
+    add_subdirectory(tests/foundation)
 endif()
