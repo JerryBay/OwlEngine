@@ -37,6 +37,7 @@ $vcpkgGitDirectory = Join-Path $vcpkgRoot '.git'
 New-Item -ItemType Directory -Path $toolsRoot -Force | Out-Null
 
 $isNewCheckout = -not (Test-Path -LiteralPath $vcpkgGitDirectory)
+$requiresBootstrap = $isNewCheckout
 if ($isNewCheckout) {
     Invoke-NativeCommand `
         -Command 'git' `
@@ -60,8 +61,10 @@ else {
     }
 }
 
-$currentRevision = (& git -C $vcpkgRoot rev-parse HEAD 2>$null)
+$currentRevision = [string](& git -C $vcpkgRoot rev-parse HEAD 2>$null)
 if ($LASTEXITCODE -ne 0 -or $currentRevision.Trim() -ne $revision) {
+    $requiresBootstrap = $true
+
     Invoke-NativeCommand `
         -Command 'git' `
         -Arguments @('-C', $vcpkgRoot, 'fetch', '--depth', '1', 'origin', $revision) `
@@ -75,7 +78,8 @@ if ($LASTEXITCODE -ne 0 -or $currentRevision.Trim() -ne $revision) {
 
 $bootstrapScript = Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat'
 $vcpkgExecutable = Join-Path $vcpkgRoot 'vcpkg.exe'
-if (-not (Test-Path -LiteralPath $vcpkgExecutable)) {
+$requiresBootstrap = $requiresBootstrap -or -not (Test-Path -LiteralPath $vcpkgExecutable)
+if ($requiresBootstrap) {
     & $bootstrapScript -disableMetrics | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to bootstrap vcpkg. Exit code: $LASTEXITCODE"
