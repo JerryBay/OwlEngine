@@ -10,6 +10,13 @@
 
 **Design:** `docs/superpowers/specs/2026-08-17-owlengine-m0-design.md`
 
+**Test target amendment (2026-08-18):** After Task 5, the module-specific
+`OwlFoundationTests` and `OwlPlatformTests` executables were consolidated into
+one `OwlUnitTests` executable owned by `tests/CMakeLists.txt`. Test sources stay
+grouped under `tests/foundation` and `tests/platform`. Earlier task steps retain
+the original target names as implementation history; all subsequent unit-test
+builds and verification use `OwlUnitTests`.
+
 ---
 
 ## File Map
@@ -54,12 +61,13 @@
 - `samples/owl_sandbox/src/SmokeSample.h`: internal smoke function declaration.
 - `samples/owl_sandbox/src/SmokeSample.cpp`: visible smoke sample policy.
 - `samples/owl_sandbox/CMakeLists.txt`: executable target, runtime output, and CLI CTest cases.
+- `tests/foundation/AssertTests.cpp`: passing assertion behavior tests.
 - `tests/foundation/BuildInfoTests.cpp`: build metadata tests.
 - `tests/foundation/CommandLineTests.cpp`: command parser tests.
 - `tests/foundation/LogTests.cpp`: repeated logging lifecycle tests.
-- `tests/foundation/CMakeLists.txt`: Foundation Catch2 executable and discovery.
+- `tests/platform/PlatformTests.cpp`: uninitialized platform behavior tests without video initialization.
 - `tests/platform/WindowTests.cpp`: null and move-state window tests without video initialization.
-- `tests/platform/CMakeLists.txt`: Platform Catch2 executable and discovery.
+- `tests/CMakeLists.txt`: one Catch2 unit-test executable with sources grouped by owning module.
 - `tests/cmake/ExpectExitCode.cmake`: verify an executable returns an exact exit code.
 
 ### CI and documentation

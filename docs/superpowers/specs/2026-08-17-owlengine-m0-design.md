@@ -156,9 +156,14 @@ OwlPlatform ---- SDL3
     |
 OwlFoundation -- spdlog
 
-OwlFoundationTests -- Catch2 -- OwlFoundation
-OwlPlatformTests   -- Catch2 -- OwlPlatform
+OwlUnitTests -- Catch2 -- OwlFoundation + OwlPlatform
 ```
+
+Unit test sources remain grouped by owning module under `tests/`, while one
+`OwlUnitTests` executable keeps the generated IDE and build target list small.
+Tests that require a GPU, a visible window, or a distinct runtime environment
+must use a separate integration target instead of expanding the unit-test
+dependency surface.
 
 ### 5.1 OwlFoundation
 
