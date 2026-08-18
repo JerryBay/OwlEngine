@@ -27,11 +27,15 @@ configure_file(
     @ONLY
 )
 
+find_package(spdlog CONFIG REQUIRED)
+
 add_library(OwlFoundation STATIC)
 
 target_sources(OwlFoundation PRIVATE
+    src/Assert.cpp
     src/BuildInfo.cpp
     src/CommandLine.cpp
+    src/Log.cpp
 )
 
 target_include_directories(OwlFoundation
@@ -41,8 +45,13 @@ target_include_directories(OwlFoundation
         "${OWL_FOUNDATION_GENERATED_DIR}"
 )
 
-target_compile_definitions(OwlFoundation PRIVATE
-    OWL_BUILD_CONFIGURATION="$<CONFIG>"
+target_compile_definitions(OwlFoundation
+    PUBLIC
+        $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:OWL_ENABLE_ASSERTS=1>
+    PRIVATE
+        OWL_BUILD_CONFIGURATION="$<CONFIG>"
 )
+
+target_link_libraries(OwlFoundation PRIVATE spdlog::spdlog)
 
 owl_enable_warnings(OwlFoundation)
