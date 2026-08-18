@@ -9,10 +9,10 @@
 using owl::foundation::Command;
 using owl::foundation::ParseCommandLine;
 
-TEST_CASE("No arguments selects help", "[command-line]")
+TEST_CASE("No arguments selects smoke", "[command-line]")
 {
     const auto parsed = ParseCommandLine(std::span<const std::string_view>{});
-    CHECK(parsed.command == Command::Help);
+    CHECK(parsed.command == Command::Smoke);
     CHECK(parsed.error.empty());
 }
 

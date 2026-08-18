@@ -7,7 +7,7 @@ ParsedCommandLine ParseCommandLine(
 {
     if (arguments.empty())
     {
-        return ParsedCommandLine{.command = Command::Help};
+        return ParsedCommandLine{.command = Command::Smoke};
     }
 
     if (arguments.size() == 1 && arguments[0] == "--help")

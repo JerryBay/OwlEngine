@@ -16,6 +16,11 @@ add_subdirectory(engine/platform)
 
 if(OWL_BUILD_TESTS)
     enable_testing()
+endif()
+
+add_subdirectory(samples/owl_sandbox)
+
+if(OWL_BUILD_TESTS)
     find_package(Catch2 3 CONFIG REQUIRED)
     include(Catch)
     add_subdirectory(tests)
