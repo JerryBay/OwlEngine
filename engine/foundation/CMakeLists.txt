@@ -31,6 +31,7 @@ add_library(OwlFoundation STATIC)
 
 target_sources(OwlFoundation PRIVATE
     src/BuildInfo.cpp
+    src/CommandLine.cpp
 )
 
 target_include_directories(OwlFoundation

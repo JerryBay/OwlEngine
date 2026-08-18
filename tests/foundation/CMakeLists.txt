@@ -2,6 +2,7 @@ add_executable(OwlFoundationTests)
 
 target_sources(OwlFoundationTests PRIVATE
     BuildInfoTests.cpp
+    CommandLineTests.cpp
 )
 
 target_link_libraries(OwlFoundationTests PRIVATE
