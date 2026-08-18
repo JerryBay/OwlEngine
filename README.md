@@ -11,9 +11,30 @@ The project prioritizes:
 
 ## Project Status
 
-OwlEngine is currently in the design stage. The repository contains the approved project roadmap; the M0 engineering baseline has not been implemented yet.
+M0, the reproducible Windows engineering baseline, is complete. It provides the Foundation,
+Platform, and Sandbox targets; a visible SDL3 smoke sample; focused CPU and executable tests; and
+Windows CI coverage for Visual Studio 2022 and Visual Studio 2026.
 
-Build and run instructions will be added when M0 establishes the reproducible workflow. Until then, the project does not claim to support `git clone -> configure -> build -> run`.
+The current implementation work is M1 design: native Vulkan bootstrap and frame lifecycle.
+
+## Build, Test, and Run on Windows
+
+Use the preset matching the installed Visual Studio version:
+
+```powershell
+# Configure with the pinned repository-local vcpkg toolchain.
+./scripts/configure.ps1 -Preset windows-vs2022
+
+# Build and test Debug. Replace vs2022 with vs2026 on that toolchain.
+cmake --build --preset windows-vs2022-debug
+ctest --preset windows-vs2022-debug
+
+# Run the required visible M0 smoke sample.
+./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample smoke
+```
+
+See [Windows build instructions](docs/building/windows.md) for prerequisites, clean reconfigure,
+and troubleshooting guidance.
 
 ## Direction
 

@@ -13,6 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(engine/foundation)
 add_subdirectory(engine/platform)
+add_subdirectory(engine/vulkan)
 
 if(OWL_BUILD_TESTS)
     enable_testing()

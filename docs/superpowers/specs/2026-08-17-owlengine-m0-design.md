@@ -3,13 +3,17 @@
 - Status: Approved
 - Date: 2026-08-17
 - Parent roadmap: [OwlEngine Roadmap Design](2026-08-17-owlengine-roadmap-design.md)
-- Implementation status: Not started
+- Implementation status: Complete (2026-08-19)
 
 ## 1. Objective
 
 M0 establishes the smallest maintainable native project that proves OwlEngine can be configured, built, tested, and run from a fresh clone without machine-specific repository changes.
 
 M0 does not contain graphics API code. Its product is a reproducible engineering path and a minimal platform smoke executable that later milestones can extend without reorganizing the repository.
+
+Acceptance evidence: the supported local configure/build/test/visible-smoke workflow completed on
+the VS2022 path, and the GitHub Actions VS2022 and VS2026 matrix completed successfully. The
+implementation remains limited to the M0 scope described by this document.
 
 The intended local acceptance path is:
 

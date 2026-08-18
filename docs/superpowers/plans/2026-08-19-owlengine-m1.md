@@ -1,0 +1,206 @@
+# OwlEngine M1 Vulkan Bootstrap Implementation Plan
+
+**Goal:** Add a native Vulkan 1.3 triangle sample that creates a validated instance, selects a
+device and queues, owns a swapchain, recovers from resize/minimize, and presents for 10,000 frames
+without validation errors.
+
+**Design:** `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md`
+
+**Boundary:** This plan implements M1 only. It does not create an RHI, a reusable renderer,
+general resource abstractions, shader compilation infrastructure, or any D3D12 code.
+
+## Task 1: Add the Vulkan Build Dependency and Target Skeleton
+
+**Files:**
+
+- Modify: `vcpkg.json`
+- Modify: `CMakeLists.txt`
+- Create: `engine/vulkan/CMakeLists.txt`
+- Create: `engine/vulkan/include/owl/vulkan/VulkanTriangle.h`
+- Create: `engine/vulkan/src/VulkanTriangle.cpp`
+
+**Steps:**
+
+1. Add the pinned-registry `vulkan` package to the manifest; do not depend on an absolute SDK path.
+2. Add the static `OwlVulkan` target after `OwlPlatform`; link `OwlFoundation`, `OwlPlatform`, and
+   `Vulkan::Vulkan` privately.
+3. Expose a small Owl-owned triangle lifecycle API with no public `Vk*` types.
+4. Confirm `windows-vs2022` configure, Debug build, and existing CTest suite still succeed.
+
+**Acceptance:** A clean configure obtains Vulkan Headers/Loader through vcpkg and `OwlVulkan`
+builds as an empty, warning-clean target.
+
+## Task 2: Extend Platform Only for M1 Surface and Sizing Needs
+
+**Files:**
+
+- Modify: `engine/platform/include/owl/platform/Window.h`
+- Modify: `engine/platform/src/sdl/Window.cpp`
+- Create: `engine/platform/src/sdl/SDLWindowAccess.h`
+- Modify: `engine/platform/CMakeLists.txt`
+- Modify: `tests/platform/WindowTests.cpp`
+
+**Steps:**
+
+1. Add an Owl-owned pixel framebuffer extent query to `Window`; it returns no Vulkan type.
+2. Create a narrowly named private SDL access header returning the SDL window for `OwlVulkan` only.
+3. Keep the header out of public include directories and add it only to `OwlVulkan`'s private include
+   path.
+4. Preserve move/null-state behavior and extend tests only where SDL video initialization is not
+   required.
+
+**Acceptance:** No public Platform header exposes `SDL_Window*`, `void*`, `VkInstance`, or
+`VkSurfaceKHR`; `OwlVulkan` can obtain the SDL window through its private boundary.
+
+## Task 3: Create Instance, Validation, and Surface Ownership
+
+**Files:**
+
+- Create: `engine/vulkan/src/VulkanInstance.h`
+- Create: `engine/vulkan/src/VulkanInstance.cpp`
+- Create: `engine/vulkan/src/VulkanSurface.h`
+- Create: `engine/vulkan/src/VulkanSurface.cpp`
+- Modify: `engine/vulkan/src/VulkanTriangle.cpp`
+
+**Steps:**
+
+1. Enumerate SDL-required instance extensions and add the debug-utils extension only when validation
+   is enabled.
+2. Enable validation only when the layer exists; log an explicit warning if it is unavailable.
+3. Route debug-messenger messages into Foundation logging with severity, message ID, and object
+   context.
+4. Create the SDL-backed surface after the instance and destroy it before the instance.
+5. Check every Vulkan result at its call site and retain the native result code in logs.
+
+**Acceptance:** The triangle sample can create and destroy an instance and surface with the Vulkan
+   validation layer enabled on a compatible developer machine.
+
+## Task 4: Implement Testable Physical-Device and Queue Selection
+
+**Files:**
+
+- Create: `engine/vulkan/src/VulkanDeviceSelection.h`
+- Create: `engine/vulkan/src/VulkanDeviceSelection.cpp`
+- Create: `tests/vulkan/DeviceSelectionTests.cpp`
+- Modify: `tests/CMakeLists.txt`
+
+**Steps:**
+
+1. Keep pure queue-family, extension, surface-format, present-mode, and extent-selection helpers
+   separate from Vulkan enumeration calls.
+2. Require Vulkan 1.3, `VK_KHR_swapchain`, graphics+present support, Dynamic Rendering, and
+   Synchronization2.
+3. Prefer one graphics/present family, but retain valid separate-family indices.
+4. Add deterministic CPU tests for rejection, preference, and extent clamping cases.
+
+**Acceptance:** Device suitability failures report their missing requirement, and CPU selection
+tests run without a Vulkan device or visible window.
+
+## Task 5: Create Device, Queues, and Swapchain Lifecycle
+
+**Files:**
+
+- Create: `engine/vulkan/src/VulkanDevice.h`
+- Create: `engine/vulkan/src/VulkanDevice.cpp`
+- Create: `engine/vulkan/src/VulkanSwapchain.h`
+- Create: `engine/vulkan/src/VulkanSwapchain.cpp`
+- Modify: `engine/vulkan/src/VulkanTriangle.cpp`
+
+**Steps:**
+
+1. Create one logical device with unique graphics/present queue create infos and only M1 feature
+   chains.
+2. Create the swapchain, image views, and logs for selected format, present mode, extent, and image
+   count.
+3. Use concurrent sharing only for separate graphics/present families.
+4. Model swapchain recreation as a local operation that preserves instance, surface, physical
+   device, logical device, and queues.
+5. Defer recreation while the window has a zero pixel extent.
+
+**Acceptance:** Resize, minimize, restore, and close do not make an out-of-date swapchain a fatal
+error or rebuild device-level objects.
+
+## Task 6: Add Per-Frame Synchronization and the Clear Path
+
+**Files:**
+
+- Create: `engine/vulkan/src/VulkanFrame.h`
+- Modify: `engine/vulkan/src/VulkanTriangle.cpp`
+- Modify: `engine/vulkan/CMakeLists.txt`
+
+**Steps:**
+
+1. Allocate two frame slots, each with a fence, acquire semaphore, render-finished semaphore,
+   command pool, and primary command buffer.
+2. Wait for the selected frame fence before acquire; reset its pool only after that wait.
+3. Treat acquire/present out-of-date and suboptimal results as recreation requests.
+4. Record explicit image layout transitions and Dynamic Rendering clear commands.
+
+**Acceptance:** The sample presents a clear color for a sustained run without implicit global waits
+or validation errors.
+
+## Task 7: Add Triangle Assets and Pipeline
+
+**Files:**
+
+- Create: `samples/owl_sandbox/assets/m1/triangle.vert.spv`
+- Create: `samples/owl_sandbox/assets/m1/triangle.frag.spv`
+- Create: `engine/vulkan/src/VulkanTrianglePipeline.h`
+- Create: `engine/vulkan/src/VulkanTrianglePipeline.cpp`
+- Modify: `samples/owl_sandbox/CMakeLists.txt`
+- Modify: `engine/vulkan/CMakeLists.txt`
+
+**Steps:**
+
+1. Add one checked-in sample-local precompiled SPIR-V vertex/fragment pair and copy it beside the
+   Debug and RelWithDebInfo executable.
+2. Load shader modules with focused error messages; do not create a shader package, cache, or DXC
+   build step.
+3. Create a minimal indexed-triangle buffer and graphics pipeline compatible with Dynamic Rendering.
+4. Recreate only pipeline state whose format or extent dependency requires it.
+
+**Acceptance:** `OwlVulkan` renders an indexed triangle after the clear path, and a RenderDoc
+capture shows the expected draw and presentation sequence.
+
+## Task 8: Wire the Sandbox Command and Regression Tests
+
+**Files:**
+
+- Modify: `engine/foundation/include/owl/foundation/CommandLine.h`
+- Modify: `engine/foundation/src/CommandLine.cpp`
+- Modify: `tests/foundation/CommandLineTests.cpp`
+- Modify: `samples/owl_sandbox/src/main.cpp`
+- Create: `samples/owl_sandbox/src/TriangleSample.h`
+- Create: `samples/owl_sandbox/src/TriangleSample.cpp`
+- Modify: `samples/owl_sandbox/CMakeLists.txt`
+
+**Steps:**
+
+1. Add the explicit `--sample triangle` command while preserving exact M0 help and smoke behavior.
+2. Keep the event loop in Sandbox policy; call one `OwlVulkan` frame operation per iteration.
+3. Extend parser and executable tests for help, triangle recognition, and invalid inputs.
+4. Do not run the interactive triangle sample in CTest.
+
+**Acceptance:** Existing M0 tests remain green and `OwlSandbox --help` documents both sample modes.
+
+## Task 9: M1 Evidence and Acceptance Run
+
+**Files:**
+
+- Modify: `docs/building/windows.md`
+- Modify: `README.md`
+- Create: `docs/learning/m1-vulkan-bootstrap.md`
+
+**Steps:**
+
+1. Document new Vulkan prerequisites, optional SDK validation-layer setup, and the supported triangle
+   command without hardcoding a machine SDK path.
+2. Record a named GPU, driver, build configuration, validation-layer status, 10,000-frame run, and
+   RenderDoc capture outcome.
+3. Run Debug and RelWithDebInfo configure/build/test for the active toolchain; preserve M0 smoke
+   verification.
+4. Update CI only when the new target needs a portable noninteractive assertion; do not claim that
+   CI proves interactive presentation.
+
+**Acceptance:** The M1 Definition of Done in the approved design has concrete local evidence, and
+the supported M0 workflow remains intact.

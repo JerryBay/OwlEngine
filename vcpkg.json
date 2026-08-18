@@ -5,6 +5,7 @@
   "dependencies": [
     "catch2",
     "sdl3",
-    "spdlog"
+    "spdlog",
+    "vulkan"
   ]
 }
