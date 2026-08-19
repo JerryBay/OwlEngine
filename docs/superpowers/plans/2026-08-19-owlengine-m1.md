@@ -61,24 +61,36 @@ the SDL window through its private boundary.
 
 **Files:**
 
+- Modify: `vcpkg.json`
+- Modify: `engine/vulkan/CMakeLists.txt`
 - Create: `engine/vulkan/src/VulkanInstance.h`
 - Create: `engine/vulkan/src/VulkanInstance.cpp`
 - Create: `engine/vulkan/src/VulkanSurface.h`
 - Create: `engine/vulkan/src/VulkanSurface.cpp`
-- Modify: `engine/vulkan/src/VulkanTriangle.cpp`
+- Modify: `tests/CMakeLists.txt`
+- Create: `tests/vulkan/VulkanBootstrapTests.cpp`
 
 **Steps:**
 
-1. Enumerate SDL-required instance extensions and add the debug-utils extension only when validation
+1. Enable SDL3's vcpkg `vulkan` feature so `SDL_WINDOW_VULKAN` and the SDL surface bridge are
+   compiled into the reproducible dependency build.
+2. Query the Vulkan Loader instance version before creation and reject versions below Vulkan 1.3
+   with the discovered native version in the error.
+3. Enumerate SDL-required instance extensions and add the debug-utils extension only when validation
    is enabled.
-2. Enable validation only when the layer exists; log an explicit warning if it is unavailable.
-3. Route debug-messenger messages into Foundation logging with severity, message ID, and object
+4. Enable validation when the layer exists. Enable the debug messenger separately when
+   `VK_EXT_debug_utils` also exists, and log an explicit warning for either missing capability.
+5. Route debug-messenger messages into Foundation logging with severity, message ID, and object
    context.
-4. Create the SDL-backed surface after the instance and destroy it before the instance.
-5. Check every Vulkan result at its call site and retain the native result code in logs.
+6. Create the SDL-backed surface after the instance and destroy it before the instance.
+7. Check every Vulkan result at its call site and retain the native result code in logs.
+8. Add deterministic CPU tests for instance configuration and an opt-in local bootstrap test that
+   creates a Vulkan window, instance, debug messenger when available, and surface. Keep the runtime
+   test skipped unless explicitly enabled so CI does not require a Vulkan driver.
 
-**Acceptance:** The triangle sample can create and destroy an instance and surface with the Vulkan
-   validation layer enabled on a compatible developer machine.
+**Acceptance:** The opt-in local bootstrap path creates and destroys an instance and surface; it
+enables the validation layer on a compatible developer machine and warns without failing when the
+layer is unavailable. Full triangle sample command wiring remains Task 8.
 
 ## Task 4: Implement Testable Physical-Device and Queue Selection
 

@@ -4,7 +4,12 @@
   "version-semver": "0.0.1",
   "dependencies": [
     "catch2",
-    "sdl3",
+    {
+      "name": "sdl3",
+      "features": [
+        "vulkan"
+      ]
+    },
     "spdlog",
     "vulkan"
   ]
