@@ -3,6 +3,7 @@ find_package(SDL3 CONFIG REQUIRED)
 add_library(OwlPlatform STATIC)
 
 target_sources(OwlPlatform PRIVATE
+    src/sdl/SDLWindowAccess.h
     src/sdl/Platform.cpp
     src/sdl/Window.cpp
 )

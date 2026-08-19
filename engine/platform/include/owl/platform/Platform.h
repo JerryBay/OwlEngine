@@ -7,12 +7,19 @@
 
 namespace owl::platform
 {
+enum class WindowSurfaceApi
+{
+    None,
+    Vulkan,
+};
+
 struct WindowDesc
 {
     std::string title;
     int width = 1280;
     int height = 720;
     bool resizable = true;
+    WindowSurfaceApi surfaceApi = WindowSurfaceApi::None;
 };
 
 enum class EventPumpResult

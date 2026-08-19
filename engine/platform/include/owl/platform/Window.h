@@ -1,10 +1,18 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 namespace owl::platform
 {
 class Platform;
+class SDLWindowAccess;
+
+struct FramebufferExtent
+{
+    int width = 0;
+    int height = 0;
+};
 
 class Window
 {
@@ -19,9 +27,11 @@ class Window
     Window& operator=(Window&& other) noexcept;
 
     [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] std::optional<FramebufferExtent> GetFramebufferExtent() const noexcept;
 
   private:
     friend class Platform;
+    friend class SDLWindowAccess;
 
     struct Impl;
     explicit Window(std::unique_ptr<Impl> impl) noexcept;

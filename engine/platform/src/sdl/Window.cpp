@@ -1,3 +1,5 @@
+#include "SDLWindowAccess.h"
+
 #include <owl/foundation/Assert.h>
 #include <owl/platform/Platform.h>
 #include <owl/platform/Window.h>
@@ -38,6 +40,27 @@ bool Window::IsValid() const noexcept
     return impl_ != nullptr && impl_->window != nullptr;
 }
 
+std::optional<FramebufferExtent> Window::GetFramebufferExtent() const noexcept
+{
+    if (!IsValid())
+    {
+        return std::nullopt;
+    }
+
+    FramebufferExtent extent;
+    if (!SDL_GetWindowSizeInPixels(impl_->window, &extent.width, &extent.height))
+    {
+        return std::nullopt;
+    }
+
+    return extent;
+}
+
+SDL_Window* SDLWindowAccess::Get(Window& window) noexcept
+{
+    return window.impl_ != nullptr ? window.impl_->window : nullptr;
+}
+
 std::optional<Window> Platform::CreateWindow(const WindowDesc& desc, std::string& error) const
 {
     if (!initialized_)
@@ -53,6 +76,10 @@ std::optional<Window> Platform::CreateWindow(const WindowDesc& desc, std::string
     if (desc.resizable)
     {
         flags |= SDL_WINDOW_RESIZABLE;
+    }
+    if (desc.surfaceApi == WindowSurfaceApi::Vulkan)
+    {
+        flags |= SDL_WINDOW_VULKAN;
     }
 
     SDL_Window* handle = SDL_CreateWindow(desc.title.c_str(), desc.width, desc.height, flags);

@@ -34,23 +34,28 @@ builds as an empty, warning-clean target.
 
 **Files:**
 
+- Modify: `engine/platform/include/owl/platform/Platform.h`
 - Modify: `engine/platform/include/owl/platform/Window.h`
 - Modify: `engine/platform/src/sdl/Window.cpp`
 - Create: `engine/platform/src/sdl/SDLWindowAccess.h`
 - Modify: `engine/platform/CMakeLists.txt`
+- Modify: `tests/platform/PlatformTests.cpp`
 - Modify: `tests/platform/WindowTests.cpp`
 
 **Steps:**
 
-1. Add an Owl-owned pixel framebuffer extent query to `Window`; it returns no Vulkan type.
-2. Create a narrowly named private SDL access header returning the SDL window for `OwlVulkan` only.
-3. Keep the header out of public include directories and add it only to `OwlVulkan`'s private include
+1. Add `WindowSurfaceApi::None/Vulkan` to `WindowDesc`; default to `None` and map only `Vulkan` to
+   `SDL_WINDOW_VULKAN` during SDL window creation.
+2. Add an Owl-owned pixel framebuffer extent query to `Window`; it returns no Vulkan type.
+3. Create a narrowly named private SDL access header returning the SDL window for `OwlVulkan` only.
+4. Keep the header out of public include directories and add it only to `OwlVulkan`'s private include
    path.
-4. Preserve move/null-state behavior and extend tests only where SDL video initialization is not
+5. Preserve move/null-state behavior and extend tests only where SDL video initialization is not
    required.
 
 **Acceptance:** No public Platform header exposes `SDL_Window*`, `void*`, `VkInstance`, or
-`VkSurfaceKHR`; `OwlVulkan` can obtain the SDL window through its private boundary.
+`VkSurfaceKHR`; Smoke windows do not request Vulkan, Vulkan windows do, and `OwlVulkan` can obtain
+the SDL window through its private boundary.
 
 ## Task 3: Create Instance, Validation, and Surface Ownership
 

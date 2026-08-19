@@ -69,11 +69,18 @@ the platform window, gives that window to `OwlVulkan`, runs the frame loop, and 
 modules, the triangle pipeline, and Vulkan diagnostics. It must not expose native Vulkan objects
 to `OwlSandbox`.
 
-`OwlPlatform` remains SDL-owned and backend-neutral in its public headers. M1 adds only two
-Platform capabilities justified by the renderer:
+`OwlPlatform` remains SDL-owned and exposes no native SDL or Vulkan types in its public headers.
+M1 adds only three Platform capabilities justified by the renderer:
 
+- a `WindowSurfaceApi::None/Vulkan` creation intent on `WindowDesc`;
 - pixel framebuffer extent query for swapchain sizing;
 - a private SDL window-access header visible only to `OwlVulkan`, not a public raw-handle API.
+
+`None` remains the default for Smoke and other ordinary windows. `Vulkan` maps privately to
+`SDL_WINDOW_VULKAN`, because SDL requires that flag before `SDL_Vulkan_CreateSurface()` can create
+the platform surface. The flag is never added unconditionally: doing so would introduce a Vulkan
+Loader/driver requirement into non-Vulkan window paths. D3D12 requires no corresponding SDL flag
+and will extend the creation policy only when its backend is implemented.
 
 The internal bridge lets `OwlVulkan` call SDL's Vulkan surface helper while keeping `SDL_Window*`,
 `VkInstance`, and `VkSurfaceKHR` out of the general Platform API. A generic `void*` native-handle
@@ -169,6 +176,8 @@ M1 is ready for implementation planning only when the following acceptance crite
 - The first renderer remains native Vulkan and intentionally has no RHI.
 - The triangle uses checked-in, sample-local precompiled SPIR-V; DXC/HLSL build integration is deferred to M4.
 - `--sample triangle` is the Vulkan acceptance command; `--sample smoke` remains the M0 platform-only command.
+- `WindowSurfaceApi::Vulkan` explicitly requests `SDL_WINDOW_VULKAN`; ordinary and future D3D12
+  windows do not acquire that Vulkan dependency.
 
 **Rejected**
 

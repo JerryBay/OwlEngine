@@ -19,3 +19,13 @@ TEST_CASE("Default and moved empty windows remain invalid", "[window]")
     CHECK_FALSE(source.IsValid());
     CHECK_FALSE(destination.IsValid());
 }
+
+TEST_CASE("Empty windows have no framebuffer extent", "[window]")
+{
+    owl::platform::Window source;
+    CHECK_FALSE(source.GetFramebufferExtent().has_value());
+
+    owl::platform::Window destination{std::move(source)};
+    CHECK_FALSE(source.GetFramebufferExtent().has_value());
+    CHECK_FALSE(destination.GetFramebufferExtent().has_value());
+}
