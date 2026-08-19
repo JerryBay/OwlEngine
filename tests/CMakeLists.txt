@@ -11,6 +11,7 @@ set(OWL_PLATFORM_TEST_SOURCES
 )
 
 set(OWL_VULKAN_TEST_SOURCES
+    vulkan/DeviceSelectionTests.cpp
     vulkan/VulkanBootstrapTests.cpp
 )
 

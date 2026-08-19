@@ -96,6 +96,7 @@ layer is unavailable. Full triangle sample command wiring remains Task 8.
 
 **Files:**
 
+- Modify: `engine/vulkan/CMakeLists.txt`
 - Create: `engine/vulkan/src/VulkanDeviceSelection.h`
 - Create: `engine/vulkan/src/VulkanDeviceSelection.cpp`
 - Create: `tests/vulkan/DeviceSelectionTests.cpp`

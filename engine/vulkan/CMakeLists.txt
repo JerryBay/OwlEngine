@@ -3,6 +3,8 @@ find_package(Vulkan REQUIRED)
 add_library(OwlVulkan STATIC)
 
 target_sources(OwlVulkan PRIVATE
+    src/VulkanDeviceSelection.cpp
+    src/VulkanDeviceSelection.h
     src/VulkanInstance.cpp
     src/VulkanInstance.h
     src/VulkanSurface.cpp
