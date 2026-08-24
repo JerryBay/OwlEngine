@@ -4,8 +4,8 @@
 
 namespace owl::foundation
 {
-[[noreturn]] void ReportAssertion(std::string_view expression, std::string_view message,
-                                  std::string_view file, int line);
+    [[noreturn]] void ReportAssertion(std::string_view expression, std::string_view message,
+                                      std::string_view file, int line);
 }
 
 #if defined(OWL_ENABLE_ASSERTS)

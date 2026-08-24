@@ -13,84 +13,84 @@
 
 namespace owl::platform
 {
-struct Window::Impl
-{
-    explicit Impl(SDL_Window* window) noexcept : window(window) {}
-
-    ~Impl()
+    struct Window::Impl
     {
-        if (window != nullptr)
+        explicit Impl(SDL_Window* window) noexcept : window(window) {}
+
+        ~Impl()
         {
-            SDL_DestroyWindow(window);
+            if (window != nullptr)
+            {
+                SDL_DestroyWindow(window);
+            }
         }
-    }
 
-    SDL_Window* window = nullptr;
-};
+        SDL_Window* window = nullptr;
+    };
 
-Window::Window() noexcept = default;
-Window::~Window() = default;
-Window::Window(Window&& other) noexcept = default;
-Window& Window::operator=(Window&& other) noexcept = default;
+    Window::Window() noexcept = default;
+    Window::~Window() = default;
+    Window::Window(Window&& other) noexcept = default;
+    Window& Window::operator=(Window&& other) noexcept = default;
 
-Window::Window(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    Window::Window(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
-bool Window::IsValid() const noexcept
-{
-    return impl_ != nullptr && impl_->window != nullptr;
-}
-
-std::optional<FramebufferExtent> Window::GetFramebufferExtent() const noexcept
-{
-    if (!IsValid())
+    bool Window::IsValid() const noexcept
     {
-        return std::nullopt;
+        return impl_ != nullptr && impl_->window != nullptr;
     }
 
-    FramebufferExtent extent;
-    if (!SDL_GetWindowSizeInPixels(impl_->window, &extent.width, &extent.height))
+    std::optional<FramebufferExtent> Window::GetFramebufferExtent() const noexcept
     {
-        return std::nullopt;
+        if (!IsValid())
+        {
+            return std::nullopt;
+        }
+
+        FramebufferExtent extent;
+        if (!SDL_GetWindowSizeInPixels(impl_->window, &extent.width, &extent.height))
+        {
+            return std::nullopt;
+        }
+
+        return extent;
     }
 
-    return extent;
-}
-
-SDL_Window* SDLWindowAccess::Get(Window& window) noexcept
-{
-    return window.impl_ != nullptr ? window.impl_->window : nullptr;
-}
-
-std::optional<Window> Platform::CreateWindow(const WindowDesc& desc, std::string& error) const
-{
-    if (!initialized_)
+    SDL_Window* SDLWindowAccess::Get(Window& window) noexcept
     {
-        error = "Platform is not initialized";
-        return std::nullopt;
+        return window.impl_ != nullptr ? window.impl_->window : nullptr;
     }
 
-    OWL_ASSERT(desc.width > 0, "Window width must be positive");
-    OWL_ASSERT(desc.height > 0, "Window height must be positive");
-
-    SDL_WindowFlags flags = 0;
-    if (desc.resizable)
+    std::optional<Window> Platform::CreateWindow(const WindowDesc& desc, std::string& error) const
     {
-        flags |= SDL_WINDOW_RESIZABLE;
-    }
-    if (desc.surfaceApi == WindowSurfaceApi::Vulkan)
-    {
-        flags |= SDL_WINDOW_VULKAN;
-    }
+        if (!initialized_)
+        {
+            error = "Platform is not initialized";
+            return std::nullopt;
+        }
 
-    SDL_Window* handle = SDL_CreateWindow(desc.title.c_str(), desc.width, desc.height, flags);
+        OWL_ASSERT(desc.width > 0, "Window width must be positive");
+        OWL_ASSERT(desc.height > 0, "Window height must be positive");
 
-    if (handle == nullptr)
-    {
-        error = std::string{"SDL_CreateWindow failed: "} + SDL_GetError();
-        return std::nullopt;
+        SDL_WindowFlags flags = 0;
+        if (desc.resizable)
+        {
+            flags |= SDL_WINDOW_RESIZABLE;
+        }
+        if (desc.surfaceApi == WindowSurfaceApi::Vulkan)
+        {
+            flags |= SDL_WINDOW_VULKAN;
+        }
+
+        SDL_Window* handle = SDL_CreateWindow(desc.title.c_str(), desc.width, desc.height, flags);
+
+        if (handle == nullptr)
+        {
+            error = std::string{"SDL_CreateWindow failed: "} + SDL_GetError();
+            return std::nullopt;
+        }
+
+        error.clear();
+        return Window{std::make_unique<Window::Impl>(handle)};
     }
-
-    error.clear();
-    return Window{std::make_unique<Window::Impl>(handle)};
-}
 } // namespace owl::platform

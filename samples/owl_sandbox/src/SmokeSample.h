@@ -2,5 +2,5 @@
 
 namespace owl::sandbox
 {
-[[nodiscard]] int RunSmokeSample();
+    [[nodiscard]] int RunSmokeSample();
 }

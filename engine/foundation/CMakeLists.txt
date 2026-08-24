@@ -32,6 +32,10 @@ find_package(spdlog CONFIG REQUIRED)
 add_library(OwlFoundation STATIC)
 
 target_sources(OwlFoundation PRIVATE
+    include/owl/foundation/Assert.h
+    include/owl/foundation/BuildInfo.h
+    include/owl/foundation/CommandLine.h
+    include/owl/foundation/Log.h
     src/Assert.cpp
     src/BuildInfo.cpp
     src/CommandLine.cpp

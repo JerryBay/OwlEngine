@@ -18,46 +18,46 @@
 
 namespace
 {
-VkExtensionProperties MakeExtension(const std::string_view name)
-{
-    VkExtensionProperties property{};
-    REQUIRE(name.size() < std::size(property.extensionName));
-    std::copy(name.begin(), name.end(), property.extensionName);
-    property.extensionName[name.size()] = '\0';
-    return property;
-}
-
-VkLayerProperties MakeLayer(const std::string_view name)
-{
-    VkLayerProperties property{};
-    REQUIRE(name.size() < std::size(property.layerName));
-    std::copy(name.begin(), name.end(), property.layerName);
-    property.layerName[name.size()] = '\0';
-    return property;
-}
-
-bool ContainsExtension(const owl::vulkan::detail::InstanceConfiguration& configuration,
-                       const std::string_view name)
-{
-    return std::ranges::any_of(configuration.enabledExtensions,
-                               [name](const char* extension) { return extension == name; });
-}
-
-class LoggingScope
-{
-  public:
-    LoggingScope()
+    VkExtensionProperties MakeExtension(const std::string_view name)
     {
-        owl::foundation::InitializeLogging();
-    }
-    ~LoggingScope()
-    {
-        owl::foundation::ShutdownLogging();
+        VkExtensionProperties property{};
+        REQUIRE(name.size() < std::size(property.extensionName));
+        std::copy(name.begin(), name.end(), property.extensionName);
+        property.extensionName[name.size()] = '\0';
+        return property;
     }
 
-    LoggingScope(const LoggingScope&) = delete;
-    LoggingScope& operator=(const LoggingScope&) = delete;
-};
+    VkLayerProperties MakeLayer(const std::string_view name)
+    {
+        VkLayerProperties property{};
+        REQUIRE(name.size() < std::size(property.layerName));
+        std::copy(name.begin(), name.end(), property.layerName);
+        property.layerName[name.size()] = '\0';
+        return property;
+    }
+
+    bool ContainsExtension(const owl::vulkan::detail::InstanceConfiguration& configuration,
+                           const std::string_view name)
+    {
+        return std::ranges::any_of(configuration.enabledExtensions,
+                                   [name](const char* extension) { return extension == name; });
+    }
+
+    class LoggingScope
+    {
+    public:
+        LoggingScope()
+        {
+            owl::foundation::InitializeLogging();
+        }
+        ~LoggingScope()
+        {
+            owl::foundation::ShutdownLogging();
+        }
+
+        LoggingScope(const LoggingScope&) = delete;
+        LoggingScope& operator=(const LoggingScope&) = delete;
+    };
 } // namespace
 
 static_assert(!std::is_copy_constructible_v<owl::vulkan::VulkanInstance>);

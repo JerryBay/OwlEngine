@@ -3,6 +3,7 @@ add_executable(OwlSandbox)
 target_sources(OwlSandbox PRIVATE
     src/main.cpp
     src/SmokeSample.cpp
+    src/SmokeSample.h
 )
 
 target_link_libraries(OwlSandbox PRIVATE

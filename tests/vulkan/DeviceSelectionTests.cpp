@@ -10,31 +10,31 @@
 
 namespace
 {
-VkExtensionProperties MakeExtension(const std::string_view name)
-{
-    VkExtensionProperties property{};
-    REQUIRE(name.size() < std::size(property.extensionName));
-    std::copy(name.begin(), name.end(), property.extensionName);
-    property.extensionName[name.size()] = '\0';
-    return property;
-}
+    VkExtensionProperties MakeExtension(const std::string_view name)
+    {
+        VkExtensionProperties property{};
+        REQUIRE(name.size() < std::size(property.extensionName));
+        std::copy(name.begin(), name.end(), property.extensionName);
+        property.extensionName[name.size()] = '\0';
+        return property;
+    }
 
-owl::vulkan::detail::DeviceCandidateCapabilities
-MakeSuitableCandidate(const std::span<const VkExtensionProperties> extensions,
-                      const std::span<const owl::vulkan::detail::QueueFamilyInfo> queueFamilies,
-                      const std::span<const VkSurfaceFormatKHR> surfaceFormats,
-                      const std::span<const VkPresentModeKHR> presentModes)
-{
-    return {
-        .apiVersion = VK_API_VERSION_1_3,
-        .extensions = extensions,
-        .queueFamilies = queueFamilies,
-        .surfaceFormats = surfaceFormats,
-        .presentModes = presentModes,
-        .dynamicRendering = true,
-        .synchronization2 = true,
-    };
-}
+    owl::vulkan::detail::DeviceCandidateCapabilities
+    MakeSuitableCandidate(const std::span<const VkExtensionProperties> extensions,
+                          const std::span<const owl::vulkan::detail::QueueFamilyInfo> queueFamilies,
+                          const std::span<const VkSurfaceFormatKHR> surfaceFormats,
+                          const std::span<const VkPresentModeKHR> presentModes)
+    {
+        return {
+            .apiVersion = VK_API_VERSION_1_3,
+            .extensions = extensions,
+            .queueFamilies = queueFamilies,
+            .surfaceFormats = surfaceFormats,
+            .presentModes = presentModes,
+            .dynamicRendering = true,
+            .synchronization2 = true,
+        };
+    }
 } // namespace
 
 TEST_CASE("Queue selection prefers a unified family over earlier separate candidates",
