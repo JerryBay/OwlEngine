@@ -1,3 +1,5 @@
+find_package(Vulkan REQUIRED)
+
 set(OWL_FOUNDATION_TEST_SOURCES
     foundation/AssertTests.cpp
     foundation/BuildInfoTests.cpp
@@ -12,6 +14,7 @@ set(OWL_PLATFORM_TEST_SOURCES
 
 set(OWL_VULKAN_TEST_SOURCES
     vulkan/DeviceSelectionTests.cpp
+    vulkan/DeviceTests.cpp
     vulkan/VulkanBootstrapTests.cpp
 )
 
@@ -36,6 +39,7 @@ target_link_libraries(OwlUnitTests PRIVATE
     OwlFoundation
     OwlPlatform
     OwlVulkan
+    Vulkan::Vulkan
 )
 
 owl_enable_warnings(OwlUnitTests)

@@ -15,7 +15,10 @@ M0, the reproducible Windows engineering baseline, is complete. It provides the 
 Platform, and Sandbox targets; a visible SDL3 smoke sample; focused CPU and executable tests; and
 Windows CI coverage for Visual Studio 2022 and Visual Studio 2026.
 
-The current implementation work is M1 design: native Vulkan bootstrap and frame lifecycle.
+M1, native Vulkan bootstrap and frame lifecycle, is in progress. Instance, Surface, physical-device
+selection, logical Device, and queues are implemented and exercised by opt-in local integration
+tests. Swapchain and presentation are next; Sandbox currently provides the smoke sample.
+See [project status](PROJECT.md) for verification scope and the next task.
 
 ## Build, Test, and Run on Windows
 

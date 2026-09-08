@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "VulkanDevice.h"
 #include "VulkanInstance.h"
 #include "VulkanSurface.h"
 
@@ -259,5 +260,93 @@ TEST_CASE("Vulkan instance and SDL surface bootstrap locally", "[vulkan][integra
     auto surface = owl::vulkan::VulkanSurface::Create(*instance, *window, error);
     INFO(error);
     REQUIRE(surface.has_value());
+    CHECK(surface->IsValid());
+}
+
+TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][device]")
+{
+    const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
+    if (enabled == nullptr || std::string_view{enabled} != "1")
+    {
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local GPU bootstrap test");
+    }
+
+    LoggingScope logging;
+    std::string error;
+    auto platform = owl::platform::Platform::Create(error);
+    INFO(error);
+    REQUIRE(platform.has_value());
+
+    const owl::platform::WindowDesc windowDesc{
+        .title = "OwlEngine - Vulkan Device Test",
+        .width = 320,
+        .height = 180,
+        .resizable = false,
+        .surfaceApi = owl::platform::WindowSurfaceApi::Vulkan,
+    };
+    auto window = platform->CreateWindow(windowDesc, error);
+    INFO(error);
+    REQUIRE(window.has_value());
+
+    auto instance = owl::vulkan::VulkanInstance::Create(error);
+    INFO(error);
+    REQUIRE(instance.has_value());
+    owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
+                                instance->ValidationEnabled()
+                                    ? "Device test validation enabled"
+                                    : "Device test validation unavailable");
+
+    auto surface = owl::vulkan::VulkanSurface::Create(*instance, *window, error);
+    INFO(error);
+    REQUIRE(surface.has_value());
+
+    auto selection =
+        owl::vulkan::VulkanDeviceSelection::Select(instance->Get(), surface->Get(), error);
+    INFO(error);
+    REQUIRE(selection.has_value());
+
+    error = "stale";
+    auto device = owl::vulkan::VulkanDevice::Create(*selection, error);
+    INFO(error);
+    REQUIRE(device.has_value());
+    REQUIRE(device->IsValid());
+    CHECK(error.empty());
+    REQUIRE(device->GraphicsQueue() != VK_NULL_HANDLE);
+    REQUIRE(device->PresentQueue() != VK_NULL_HANDLE);
+    CHECK(device->QueueFamilies().graphicsFamily == selection->QueueFamilies().graphicsFamily);
+    CHECK(device->QueueFamilies().presentFamily == selection->QueueFamilies().presentFamily);
+    if (selection->QueueFamilies().UsesUnifiedFamily())
+    {
+        CHECK(device->GraphicsQueue() == device->PresentQueue());
+    }
+
+    const VkDevice originalDevice = device->Get();
+    const VkQueue originalGraphicsQueue = device->GraphicsQueue();
+    const VkQueue originalPresentQueue = device->PresentQueue();
+    owl::vulkan::VulkanDevice moved{std::move(*device)};
+    CHECK_FALSE(device->IsValid());
+    CHECK(device->GraphicsQueue() == VK_NULL_HANDLE);
+    CHECK(device->PresentQueue() == VK_NULL_HANDLE);
+    CHECK_FALSE(device->QueueFamilies().IsComplete());
+    REQUIRE(moved.Get() == originalDevice);
+    CHECK(vkDeviceWaitIdle(moved.Get()) == VK_SUCCESS);
+
+    auto destination = owl::vulkan::VulkanDevice::Create(*selection, error);
+    INFO(error);
+    REQUIRE(destination.has_value());
+    *destination = std::move(moved);
+    CHECK_FALSE(moved.IsValid());
+    CHECK(moved.GraphicsQueue() == VK_NULL_HANDLE);
+    CHECK(moved.PresentQueue() == VK_NULL_HANDLE);
+    CHECK_FALSE(moved.QueueFamilies().IsComplete());
+    REQUIRE(destination->Get() == originalDevice);
+    CHECK(destination->GraphicsQueue() == originalGraphicsQueue);
+    CHECK(destination->PresentQueue() == originalPresentQueue);
+    CHECK(destination->QueueFamilies().graphicsFamily == selection->QueueFamilies().graphicsFamily);
+    CHECK(destination->QueueFamilies().presentFamily == selection->QueueFamilies().presentFamily);
+    CHECK(vkDeviceWaitIdle(destination->Get()) == VK_SUCCESS);
+
+    destination.reset();
+    CHECK(instance->IsValid());
     CHECK(surface->IsValid());
 }

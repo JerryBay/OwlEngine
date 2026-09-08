@@ -50,7 +50,27 @@ ctest --preset windows-vs2026-debug
 ctest --preset windows-vs2026-relwithdebinfo
 ```
 
-CTest verifies CPU and command-line behavior. It does not open a GUI window.
+By default, CTest verifies CPU and command-line behavior and skips the local Vulkan integration
+tests, so it does not open a GUI window.
+
+## Local Vulkan Integration Tests
+
+On a Vulkan 1.3-capable machine with an interactive desktop, opt in to the bootstrap tests:
+
+```powershell
+# Use the preset matching the installed Visual Studio version.
+$env:OWL_RUN_VULKAN_BOOTSTRAP_TEST = "1"
+ctest --preset windows-vs2026-debug -R "bootstrap locally" -V
+Remove-Item Env:OWL_RUN_VULKAN_BOOTSTRAP_TEST
+```
+
+These tests briefly create SDL windows. One verifies Instance and Surface lifetime; the other also
+selects a physical device, creates the logical Device and graphics/present queues, and checks move
+construction, replacement, and destruction. They do not submit rendering work or present images.
+
+Debug and RelWithDebInfo request validation when `VK_LAYER_KHRONOS_validation` is available.
+A missing layer produces a warning without failing the tests; such a pass is runtime evidence,
+not evidence of a validation-clean run.
 
 ## Run the Visible Smoke Sample
 

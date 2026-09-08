@@ -4,6 +4,8 @@ add_library(OwlVulkan STATIC)
 
 target_sources(OwlVulkan PRIVATE
     include/owl/vulkan/VulkanTriangle.h
+    src/VulkanDevice.cpp
+    src/VulkanDevice.h
     src/VulkanDeviceSelection.cpp
     src/VulkanDeviceSelection.h
     src/VulkanInstance.cpp
