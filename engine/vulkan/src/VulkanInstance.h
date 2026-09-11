@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VulkanPresentationSupport.h"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -18,6 +20,7 @@ namespace owl::vulkan
         struct InstanceConfiguration
         {
             std::vector<const char*> enabledExtensions;
+            PresentationSupportCapabilities presentationSupport;
             bool validationEnabled = false;
             bool debugMessengerEnabled = false;
             std::string validationWarning;
@@ -52,16 +55,20 @@ namespace owl::vulkan
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] VkInstance Get() const noexcept;
         [[nodiscard]] bool ValidationEnabled() const noexcept;
+        [[nodiscard]] const detail::PresentationSupportCapabilities&
+        PresentationSupport() const noexcept;
 
     private:
         VulkanInstance(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger,
                        PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger,
-                       bool validationEnabled) noexcept;
+                       bool validationEnabled,
+                       detail::PresentationSupportCapabilities presentationSupport) noexcept;
         void Reset() noexcept;
 
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
         PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger_ = nullptr;
         bool validationEnabled_ = false;
+        detail::PresentationSupportCapabilities presentationSupport_{};
     };
 } // namespace owl::vulkan

@@ -14,9 +14,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
 - Current phase: M1, native Vulkan 1.3 bootstrap and frame lifecycle.
-- Current implementation boundary: M1 Tasks 1-4 and Task 5's Device/queue step are implemented.
-  Local integration tests reach Window + Instance + Surface + physical-device selection + Device
-  and queues. Sandbox still runs only the smoke sample; Swapchain and presentation remain pending.
+- Current implementation boundary: M1 Tasks 1-6 are implemented through clear-color presentation.
+  Local integration tests reach the full native Vulkan frame lifecycle and window-driven
+  recreation. Sandbox now provides smoke and persistent clear samples; the triangle pipeline and
+  its Sandbox entry remain pending. This is not full M1 acceptance.
 
 ## Implemented Baseline
 
@@ -30,29 +31,55 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     and present queue families, surface format, present mode, and extent selection.
   - Move-only `VulkanDevice`, unique queue-family requests, M1 feature/extension enablement,
     borrowed graphics/present queue handles, and an opt-in real-GPU lifetime test in `OwlUnitTests`.
+  - Move-only `VulkanSwapchain`, fresh Surface capability/format/mode queries, image views,
+    local recreation, zero-extent deferral, and opt-in real-GPU resource lifecycle tests.
+  - `VulkanTriangle` lifecycle, currently clear-only: two frame slots, command pools/buffers,
+    acquire, Dynamic Rendering clear, Synchronization2 submit, and present. Slot acquisition and
+    submission fences track cleanup independently; present semaphores belong to swapchain images.
+  - Optional KHR/EXT swapchain-maintenance feature/dependency negotiation and per-image present
+    fences, with a diagnostic option to force the compatibility fallback. Window resize and
+    out-of-date results request recreation; minimized/hidden/zero-size windows defer rendering.
+  - `OwlSandbox --sample clear`: persistent resizable Vulkan window, event polling, paced frames,
+    Escape/close handling, reported errors, and renderer-before-window teardown. Default command
+    remains Smoke. MSVC delay-load and app-local deployment preserve non-Vulkan startup paths.
 - Verified:
-  - 2026-09-07, VS2026 Debug and RelWithDebInfo: both build presets succeeded; each default CTest
-    preset reported 35 passed, 2 opt-in GPU tests skipped, and 0 failed.
-  - User confirmation received 2026-09-07: the opt-in local Vulkan Window + Instance + Surface
-    bootstrap test passed.
-  - 2026-09-07, VS2026 Debug: both GPU tests passed with `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1`.
-    Device creation, queue retrieval, move construction, replacement, and destruction passed
-    32 assertions on NVIDIA GeForce RTX 5060 (reported Vulkan API 1.4.341, unified family 0).
-    The loader reported 1.4.350; the validation layer was unavailable, so this is runtime evidence
-    without validation-layer coverage.
+  - 2026-09-11, VS2026 Debug and RelWithDebInfo: both build presets succeeded; each default CTest
+    preset reported 53 passed, 4 opt-in GPU tests skipped, and 0 failed.
+  - Both configurations passed all four GPU tests with `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1` on
+    NVIDIA GeForce RTX 5060 (reported API 1.4.341, unified family 0; loader 1.4.350).
+    Swapchain checks cover 320x180, 640x360, and 480x270, moves including live-owner replacement,
+    preflight failure preservation, explicit zero-size deferral on minimize, and recreation on
+    restore. Each created swapchain had 3 images/views; device-level objects remained unchanged.
+  - Clear-renderer tests presented 300 frames per mode with automatic present fences enabled
+    and explicitly disabled: 640x360, resize to 800x450 and 480x270, minimize without submission,
+    restore, move, idle, and cleanup. Both modes passed in both configurations.
+  - Catch2 discovery now uses `PRE_TEST`: after building both configurations, CTest JSON listings
+    and verbose GPU runs confirm each preset selects its own executable. The previous shared
+    post-build list could select the last-built configuration instead of the requested one.
+  - Validation Layer was unavailable; GPU passes are runtime evidence without validation coverage.
+  - The formal Debug Clear entry presented 4,980 frames and exited with code 0 via Escape.
+    Its loaded module was the app-local Vulkan Loader; both deployed configurations' DLL hashes
+    matched their vcpkg package DLLs. A running Debug Smoke process had no Vulkan Loader module
+    and exited with code 0 through the window-close path.
+  - The user previously confirmed the temporary 640x360 green clear probe visually.
 - Unverified:
   - The current revision on VS2022; validate it on the separate VS2022 computer.
   - GPU creation on hardware with separate graphics/present families (CPU policy tests cover it),
-    a validation-enabled GPU run, and GPU tests in RelWithDebInfo.
-  - Swapchain, frame synchronization, resize recovery, clear, triangle,
-    10,000-frame validation run, and RenderDoc acceptance.
+    and a validation-enabled GPU run.
+  - Native resource/submit/fence failure injection and driver-returned out-of-date recovery;
+    policy branches and synchronization/lifetime code are tested/reviewed, not fault-injected.
+  - RenderDoc clear-frame capture: local injection could not connect to the target and produced
+    no capture. The formal Clear entry still needs manual visual acceptance; this machine's
+    desktop screenshot tool failed with an unsupported capture interface, so no new pixel
+    inspection was claimed.
+  - Triangle, 10,000-frame validation run, and full M1 RenderDoc acceptance.
 
 ## Milestones
 
 | Milestone | Delivery | Validation | Completion condition |
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
-| M1 Vulkan Bootstrap and Frame Lifecycle | In progress: Tasks 1-4 and Device/queues implemented | CPU tests pass; Debug GPU bootstrap through Device/queues passes without Validation Layer | Triangle, resize/minimize recovery, 10,000 validation-clean frames, and RenderDoc capture |
+| M1 Vulkan Bootstrap and Frame Lifecycle | In progress: bootstrap through clear/present and rendered window recovery implemented | CPU tests and Debug/RelWithDebInfo GPU tests pass in both presentation modes without Validation Layer | Triangle, rendered resize/minimize recovery, 10,000 validation-clean frames, and RenderDoc capture |
 | M2-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -61,9 +88,19 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - Keep native Vulkan calls visible through the reference renderer; extract RHI only after real
     Vulkan call sites exist, then use D3D12 to challenge Vulkan-shaped assumptions.
   - Vulkan 1.3, Dynamic Rendering, and Synchronization2 are the M1 desktop baseline.
-  - `VulkanDevice` owns only its logical device and borrows its queues. Its Instance must outlive
+  - `VulkanDevice` owns only its logical device and borrows its physical device and queues. Its Instance must outlive
     it; before destruction or replacement the caller must finish GPU work, destroy child objects,
     and exclude concurrent host access. Destruction performs no implicit idle wait.
+  - `VulkanSwapchain` owns its swapchain and views, not the images or parents. Recreate/destroy
+    requires completed use, released external dependents, and no concurrent access; no implicit wait.
+    `Deferred` preserves resources but suspends acquisition. Preflight failures preserve resources;
+    once `vkCreateSwapchainKHR` is called, the old chain is retired and destroyed even on failure.
+  - `VulkanTriangle` owns renderer objects and waits before replacement/destruction; its borrowed
+    Window must outlive it and remain unmoved. All renderer calls belong to the window thread.
+    The caller pumps events and throttles deferred frames; no per-frame device-idle wait is used.
+  - Keep Vulkan 1.3 as the minimum. Present fences are optional, with KHR preferred over EXT.
+    On unsupported devices, use the approved device-idle recreation/shutdown fallback and report
+    its presentation-resource completion guarantee limitation rather than claiming strict WSI safety.
   - Support both VS2022 and VS2026 through separate CMake Presets; validate each on its available
     computer rather than requiring duplicate third-party source versions.
   - Use pinned vcpkg manifest dependencies. SDL3 remains behind `OwlPlatform`.
@@ -74,9 +111,13 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Known limitations:
   - Device selection currently returns the first suitable physical device; there is no adapter
     scoring, discrete-GPU preference, or user override.
-  - Surface format and present mode are initial selection snapshots; robust swapchain recreation
-    must re-query surface-dependent capabilities where required.
-  - `VulkanSwapchain`, rendering submission, presentation, and Sandbox triangle wiring are pending.
+  - Device-selection surface preferences are snapshots; Swapchain creation/recreation re-queries
+    current Surface support instead of trusting those snapshots.
+  - Minimized windows can retain a nonzero framebuffer size in SDL; the renderer checks window
+    flags as well as pixel size. Surface/device loss is terminal; automatic recovery is deferred.
+  - Presentation fences establish resource release, not display scanout completion. Compatibility
+    fallback runs successfully locally but lacks the same specification-level release guarantee.
+  - Triangle drawing and its dedicated Sandbox command are pending.
 
 ## Entry Points and Evidence
 
@@ -88,13 +129,22 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `tests/CMakeLists.txt`
 - Device contract and tests: `engine/vulkan/src/VulkanDevice.h`, `tests/vulkan/DeviceTests.cpp`,
   and `tests/vulkan/VulkanBootstrapTests.cpp`
-- Current validation evidence: the VS2026 build/CTest and Debug GPU results recorded above.
+- Swapchain contract and tests: `engine/vulkan/src/VulkanSwapchain.h` and
+  `tests/vulkan/SwapchainTests.cpp`
+- Frame lifecycle and tests: `engine/vulkan/include/owl/vulkan/VulkanTriangle.h`,
+  `engine/vulkan/src/VulkanTriangle.cpp`, `engine/vulkan/src/VulkanFrame.h`, and
+  `tests/vulkan/FrameTests.cpp`
+- Interactive clear entry: `samples/owl_sandbox/src/ClearSample.cpp`; launch and manual checks
+  are documented in `docs/building/windows.md`.
+- Current validation evidence: the VS2026 build/CTest and both-configuration GPU results above.
   Reproduce the GPU checks with the opt-in commands in `docs/building/windows.md`.
 
 ## Next Work
 
-- Next task: the remaining M1 Task 5 work, implement `VulkanSwapchain`, swapchain images/views,
-  surface capability queries, and local recreation using the existing Device/queues.
-- Acceptance condition: create the swapchain with correct lifetime ordering,
-  support unified and separate queue families, keep zero-size windows non-fatal, and localize
-  swapchain recreation without rebuilding Instance, Surface, physical-device selection, or Device.
+- Next task: M1 Task 7, sample-local precompiled SPIR-V assets, an indexed-triangle buffer, and a
+  Dynamic Rendering graphics pipeline on the existing frame lifecycle. Task 8 adds the triangle
+  command; the clear command is already available for manual acceptance. Follow the approved M1
+  shader scope rather than introducing a shader build system here.
+- Acceptance condition: visible triangle, pipeline/shader lifetime correctness, deterministic asset
+  deployment, and unchanged window recovery behavior. Keep RHI outside this slice. A
+  validation-enabled run and the full 10,000-frame/RenderDoc acceptance remain required for M1.

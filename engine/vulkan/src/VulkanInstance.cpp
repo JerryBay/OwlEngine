@@ -223,6 +223,37 @@ namespace owl::vulkan
                 AppendUniqueExtension(configuration.enabledExtensions, requiredExtension);
             }
 
+            const bool surfaceEnabled = std::ranges::any_of(
+                configuration.enabledExtensions, [](const char* extension)
+                { return std::string_view{extension} == VK_KHR_SURFACE_EXTENSION_NAME; });
+            const bool capabilities2Available =
+                HasExtension(availableExtensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+
+            if (surfaceEnabled && capabilities2Available)
+            {
+                const bool khrMaintenanceAvailable =
+                    HasExtension(availableExtensions, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+                const bool extMaintenanceAvailable =
+                    HasExtension(availableExtensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+                if (khrMaintenanceAvailable || extMaintenanceAvailable)
+                {
+                    AppendUniqueExtension(configuration.enabledExtensions,
+                                          VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+                }
+                if (khrMaintenanceAvailable)
+                {
+                    AppendUniqueExtension(configuration.enabledExtensions,
+                                          VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+                    configuration.presentationSupport.khrSurfaceMaintenance1 = true;
+                }
+                if (extMaintenanceAvailable)
+                {
+                    AppendUniqueExtension(configuration.enabledExtensions,
+                                          VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+                    configuration.presentationSupport.extSurfaceMaintenance1 = true;
+                }
+            }
+
             if (!requestValidation)
             {
                 return configuration;
@@ -311,7 +342,9 @@ namespace owl::vulkan
         : instance_(std::exchange(other.instance_, VK_NULL_HANDLE)),
           debugMessenger_(std::exchange(other.debugMessenger_, VK_NULL_HANDLE)),
           destroyDebugMessenger_(std::exchange(other.destroyDebugMessenger_, nullptr)),
-          validationEnabled_(std::exchange(other.validationEnabled_, false))
+          validationEnabled_(std::exchange(other.validationEnabled_, false)),
+          presentationSupport_(
+              std::exchange(other.presentationSupport_, detail::PresentationSupportCapabilities{}))
     {
     }
 
@@ -324,6 +357,8 @@ namespace owl::vulkan
             debugMessenger_ = std::exchange(other.debugMessenger_, VK_NULL_HANDLE);
             destroyDebugMessenger_ = std::exchange(other.destroyDebugMessenger_, nullptr);
             validationEnabled_ = std::exchange(other.validationEnabled_, false);
+            presentationSupport_ = std::exchange(other.presentationSupport_,
+                                                 detail::PresentationSupportCapabilities{});
         }
         return *this;
     }
@@ -446,7 +481,7 @@ namespace owl::vulkan
 
         error.clear();
         return VulkanInstance{instance, debugMessenger, destroyDebugMessenger,
-                              configuration->validationEnabled};
+                              configuration->validationEnabled, configuration->presentationSupport};
     }
 
     bool VulkanInstance::IsValid() const noexcept
@@ -464,12 +499,20 @@ namespace owl::vulkan
         return validationEnabled_;
     }
 
-    VulkanInstance::VulkanInstance(const VkInstance instance,
-                                   const VkDebugUtilsMessengerEXT debugMessenger,
-                                   const PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger,
-                                   const bool validationEnabled) noexcept
+    const detail::PresentationSupportCapabilities&
+    VulkanInstance::PresentationSupport() const noexcept
+    {
+        return presentationSupport_;
+    }
+
+    VulkanInstance::VulkanInstance(
+        const VkInstance instance, const VkDebugUtilsMessengerEXT debugMessenger,
+        const PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger,
+        const bool validationEnabled,
+        const detail::PresentationSupportCapabilities presentationSupport) noexcept
         : instance_(instance), debugMessenger_(debugMessenger),
-          destroyDebugMessenger_(destroyDebugMessenger), validationEnabled_(validationEnabled)
+          destroyDebugMessenger_(destroyDebugMessenger), validationEnabled_(validationEnabled),
+          presentationSupport_(presentationSupport)
     {
     }
 
@@ -489,5 +532,6 @@ namespace owl::vulkan
         debugMessenger_ = VK_NULL_HANDLE;
         destroyDebugMessenger_ = nullptr;
         validationEnabled_ = false;
+        presentationSupport_ = {};
     }
 } // namespace owl::vulkan

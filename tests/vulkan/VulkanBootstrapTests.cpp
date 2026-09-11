@@ -2,6 +2,7 @@
 
 #include "VulkanDevice.h"
 #include "VulkanInstance.h"
+#include "VulkanPresentationSupport.h"
 #include "VulkanSurface.h"
 
 #include <owl/foundation/Log.h>
@@ -111,6 +112,56 @@ TEST_CASE("Newer loaders are accepted and duplicate SDL extensions are removed",
     REQUIRE(configuration->enabledExtensions.size() == 1);
     CHECK(std::string_view{configuration->enabledExtensions.front()} ==
           VK_KHR_SURFACE_EXTENSION_NAME);
+    CHECK(error.empty());
+}
+
+TEST_CASE("Instance configuration enables available presentation-maintenance dependencies",
+          "[vulkan]")
+{
+    const std::array requiredExtensions{VK_KHR_SURFACE_EXTENSION_NAME};
+    const std::array availableExtensions{
+        MakeExtension(VK_KHR_SURFACE_EXTENSION_NAME),
+        MakeExtension(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME),
+        MakeExtension(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
+        MakeExtension(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
+    };
+    const std::array<VkLayerProperties, 0> availableLayers{};
+    std::string error = "stale";
+
+    const auto configuration = owl::vulkan::detail::SelectInstanceConfiguration(
+        VK_API_VERSION_1_3, requiredExtensions, availableExtensions, availableLayers, false, error);
+
+    REQUIRE(configuration.has_value());
+    CHECK(ContainsExtension(*configuration, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME));
+    CHECK(ContainsExtension(*configuration, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+    CHECK(ContainsExtension(*configuration, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+    CHECK(configuration->presentationSupport.khrSurfaceMaintenance1);
+    CHECK(configuration->presentationSupport.extSurfaceMaintenance1);
+    CHECK(error.empty());
+}
+
+TEST_CASE("Instance configuration omits presentation maintenance with incomplete dependencies",
+          "[vulkan]")
+{
+    const std::array requiredExtensions{VK_KHR_SURFACE_EXTENSION_NAME};
+    const std::array availableExtensions{
+        MakeExtension(VK_KHR_SURFACE_EXTENSION_NAME),
+        MakeExtension(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
+        MakeExtension(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
+    };
+    const std::array<VkLayerProperties, 0> availableLayers{};
+    std::string error = "stale";
+
+    const auto configuration = owl::vulkan::detail::SelectInstanceConfiguration(
+        VK_API_VERSION_1_3, requiredExtensions, availableExtensions, availableLayers, false, error);
+
+    REQUIRE(configuration.has_value());
+    CHECK_FALSE(
+        ContainsExtension(*configuration, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME));
+    CHECK_FALSE(ContainsExtension(*configuration, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+    CHECK_FALSE(ContainsExtension(*configuration, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+    CHECK_FALSE(configuration->presentationSupport.khrSurfaceMaintenance1);
+    CHECK_FALSE(configuration->presentationSupport.extSurfaceMaintenance1);
     CHECK(error.empty());
 }
 
@@ -306,13 +357,20 @@ TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][d
     REQUIRE(selection.has_value());
 
     error = "stale";
-    auto device = owl::vulkan::VulkanDevice::Create(*selection, error);
+    auto device =
+        owl::vulkan::VulkanDevice::Create(*selection, error, instance->PresentationSupport());
     INFO(error);
     REQUIRE(device.has_value());
     REQUIRE(device->IsValid());
+    CHECK(device->PhysicalDevice() == selection->Get());
     CHECK(error.empty());
     REQUIRE(device->GraphicsQueue() != VK_NULL_HANDLE);
     REQUIRE(device->PresentQueue() != VK_NULL_HANDLE);
+    if (device->HasPresentFences())
+    {
+        CHECK((instance->PresentationSupport().khrSurfaceMaintenance1 ||
+               instance->PresentationSupport().extSurfaceMaintenance1));
+    }
     CHECK(device->QueueFamilies().graphicsFamily == selection->QueueFamilies().graphicsFamily);
     CHECK(device->QueueFamilies().presentFamily == selection->QueueFamilies().presentFamily);
     if (selection->QueueFamilies().UsesUnifiedFamily())
@@ -323,23 +381,33 @@ TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][d
     const VkDevice originalDevice = device->Get();
     const VkQueue originalGraphicsQueue = device->GraphicsQueue();
     const VkQueue originalPresentQueue = device->PresentQueue();
+    const bool originalHasPresentFences = device->HasPresentFences();
     owl::vulkan::VulkanDevice moved{std::move(*device)};
     CHECK_FALSE(device->IsValid());
+    CHECK(device->PhysicalDevice() == VK_NULL_HANDLE);
     CHECK(device->GraphicsQueue() == VK_NULL_HANDLE);
     CHECK(device->PresentQueue() == VK_NULL_HANDLE);
+    CHECK_FALSE(device->HasPresentFences());
     CHECK_FALSE(device->QueueFamilies().IsComplete());
     REQUIRE(moved.Get() == originalDevice);
+    CHECK(moved.PhysicalDevice() == selection->Get());
+    CHECK(moved.HasPresentFences() == originalHasPresentFences);
     CHECK(vkDeviceWaitIdle(moved.Get()) == VK_SUCCESS);
 
-    auto destination = owl::vulkan::VulkanDevice::Create(*selection, error);
+    auto destination =
+        owl::vulkan::VulkanDevice::Create(*selection, error, instance->PresentationSupport());
     INFO(error);
     REQUIRE(destination.has_value());
     *destination = std::move(moved);
     CHECK_FALSE(moved.IsValid());
+    CHECK(moved.PhysicalDevice() == VK_NULL_HANDLE);
     CHECK(moved.GraphicsQueue() == VK_NULL_HANDLE);
     CHECK(moved.PresentQueue() == VK_NULL_HANDLE);
+    CHECK_FALSE(moved.HasPresentFences());
     CHECK_FALSE(moved.QueueFamilies().IsComplete());
     REQUIRE(destination->Get() == originalDevice);
+    CHECK(destination->PhysicalDevice() == selection->Get());
+    CHECK(destination->HasPresentFences() == originalHasPresentFences);
     CHECK(destination->GraphicsQueue() == originalGraphicsQueue);
     CHECK(destination->PresentQueue() == originalPresentQueue);
     CHECK(destination->QueueFamilies().graphicsFamily == selection->QueueFamilies().graphicsFamily);

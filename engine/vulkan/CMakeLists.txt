@@ -8,10 +8,15 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanDevice.h
     src/VulkanDeviceSelection.cpp
     src/VulkanDeviceSelection.h
+    src/VulkanFrame.cpp
+    src/VulkanFrame.h
     src/VulkanInstance.cpp
     src/VulkanInstance.h
+    src/VulkanPresentationSupport.h
     src/VulkanSurface.cpp
     src/VulkanSurface.h
+    src/VulkanSwapchain.cpp
+    src/VulkanSwapchain.h
     src/VulkanTriangle.cpp
 )
 

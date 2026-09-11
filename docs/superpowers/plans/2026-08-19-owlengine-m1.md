@@ -143,19 +143,48 @@ error or rebuild device-level objects.
 **Files:**
 
 - Create: `engine/vulkan/src/VulkanFrame.h`
+- Create: `engine/vulkan/src/VulkanFrame.cpp`
+- Create: `engine/vulkan/src/VulkanPresentationSupport.h`
+- Modify: `engine/vulkan/include/owl/vulkan/VulkanTriangle.h`
+- Modify: `engine/vulkan/src/VulkanInstance.h/.cpp`
+- Modify: `engine/vulkan/src/VulkanDevice.h/.cpp`
 - Modify: `engine/vulkan/src/VulkanTriangle.cpp`
 - Modify: `engine/vulkan/CMakeLists.txt`
+- Create: `tests/vulkan/FrameTests.cpp`
 
 **Steps:**
 
-1. Allocate two frame slots, each with a fence, acquire semaphore, render-finished semaphore,
-   command pool, and primary command buffer.
+1. Allocate two frame slots, each with a submission fence, acquire semaphore, acquire-completion
+   fence for error-path cleanup, command pool, and primary command buffer. Allocate render-finished
+   semaphores by swapchain image, not by frame slot.
 2. Wait for the selected frame fence before acquire; reset its pool only after that wait.
 3. Treat acquire/present out-of-date and suboptimal results as recreation requests.
 4. Record explicit image layout transitions and Dynamic Rendering clear commands.
+5. Prefer optional KHR/EXT swapchain-maintenance present fences when the full dependency/feature
+   chain is available. Preserve the Vulkan 1.3 fallback and log its WaitIdle lifetime limitation.
+6. Reset the submission fence only after successful acquisition and command recording. Track
+   whether acquire, submit, and present operations were actually enqueued to avoid waiting on
+   unsignaled fences on retry/failure paths.
+7. Keep the public sample lifecycle free of Vulkan handles. Validate clear presentation through
+   an opt-in GPU test before adding the triangle pipeline and Sandbox command in Tasks 7-8.
 
-**Acceptance:** The sample presents a clear color for a sustained run without implicit global waits
-or validation errors.
+**Acceptance:** The sample lifecycle presents a clear color for a sustained run without per-frame
+global idle waits. Resize/minimize/restore preserve device-level objects. Test both optional-fence
+and explicit compatibility modes, and keep validation-layer and fallback guarantees distinct.
+
+### Task 6 Follow-up: Interactive Clear Entry
+
+Implemented ahead of triangle wiring to provide a persistent manual acceptance window:
+
+- `OwlSandbox --sample clear` creates a Vulkan-intent window and uses the existing clear lifecycle.
+- Sandbox owns event polling and frame pacing, including `Deferred`; teardown keeps the renderer
+  before its borrowed window and keeps logging alive through cleanup.
+- No arguments still run Smoke. Parser/help and a non-GUI Platform-failure test cover the new entry.
+- MSVC delay-loads the Loader. The Sandbox directory uses vcpkg's PowerShell deployment path to
+  include delay imports without changing deployment for other targets.
+- VS2026 Debug and RelWithDebInfo build/default tests and four opt-in GPU tests pass. The Debug
+  interactive entry presents and exits normally. Manual pixels, validation-enabled runs, and
+  RenderDoc acceptance remain open; this is not triangle or full M1 acceptance.
 
 ## Task 7: Add Triangle Assets and Pipeline
 
@@ -194,12 +223,13 @@ capture shows the expected draw and presentation sequence.
 
 **Steps:**
 
-1. Add the explicit `--sample triangle` command while preserving exact M0 help and smoke behavior.
+1. Add the explicit `--sample triangle` command while preserving Smoke and the existing clear entry.
 2. Keep the event loop in Sandbox policy; call one `OwlVulkan` frame operation per iteration.
 3. Extend parser and executable tests for help, triangle recognition, and invalid inputs.
 4. Do not run the interactive triangle sample in CTest.
 
-**Acceptance:** Existing M0 tests remain green and `OwlSandbox --help` documents both sample modes.
+**Acceptance:** Existing M0 and clear-entry tests remain green and `OwlSandbox --help` documents
+all supported sample modes.
 
 ## Task 9: M1 Evidence and Acceptance Run
 

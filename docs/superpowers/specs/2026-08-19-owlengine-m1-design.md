@@ -23,7 +23,8 @@ does not extract an RHI or introduce a renderer architecture.
 - Vulkan instance, debug messenger, physical-device selection, logical device, and queues
 - SDL-created Vulkan surface and Vulkan-owned `VkSurfaceKHR`
 - Swapchain selection, creation, image views, and swapchain recreation
-- Per-frame fences, acquire/present semaphores, command pools, and command buffers
+- Per-frame fences, acquire semaphores, command pools, and command buffers; per-image present semaphores
+- Optional swapchain-maintenance present fences with an explicitly limited Vulkan 1.3 fallback
 - Dynamic Rendering clear path followed by an indexed triangle
 - Debug names and structured logging of Vulkan results and selected capabilities
 - Focused CPU tests for deterministic queue, extension, and swapchain-selection logic
@@ -103,8 +104,8 @@ reference old swapchain resources, destroys swapchain-dependent resources, obtai
 pixel extent, then creates replacements. Device-, instance-, and surface-level objects survive a
 normal resize.
 
-Minimized windows are not fatal. The loop continues pumping events and defers recreation until
-SDL reports a non-zero pixel extent.
+Minimized windows are not fatal. The loop continues pumping events and defers rendering while
+minimized or while the pixel extent is zero; SDL can retain a non-zero size when minimized.
 
 ## 6. Device and Swapchain Policy
 
@@ -134,11 +135,34 @@ For each frame slot:
 3. Wait for the slot fence, then acquire the next swapchain image.
 4. Treat `VK_ERROR_OUT_OF_DATE_KHR` as a recreation request, not a fatal error.
 5. Reset the slot command pool and record image transitions, clear rendering, and the triangle.
-6. Submit with acquire and render-finished semaphores, then present.
+   Reset the submission fence only immediately before submitting successfully recorded work.
+6. Submit with the slot's acquire semaphore and the acquired image's render-finished semaphore,
+   then present. An acquired-but-unsubmitted failure is terminal; an acquire fence proves the
+   semaphore's WSI signal has completed before resources are destroyed.
 7. Treat present out-of-date or suboptimal results as a request to recreate after the frame.
 
-The baseline uses two frames in flight. It performs no CPU readback, no implicit global synchronization,
-and no generalized barrier abstraction.
+The baseline uses two frames in flight. It performs no CPU readback, no per-frame global idle wait,
+and no generalized barrier abstraction. Acquisition uses a finite timeout so an unavailable image
+returns control to the event loop without resetting a fence that will never be submitted.
+
+### Presentation Resource Completion
+
+The submission fence only protects submitted frame resources; it does not prove that Present
+has consumed its wait semaphore. Render-finished semaphores are indexed by swapchain image.
+Reacquiring an image and waiting for acquisition orders the next use of that image's semaphore.
+
+Prefer `VK_KHR_swapchain_maintenance1`, then its `VK_EXT_swapchain_maintenance1` alias when the
+matching instance dependencies, device extension, and feature are available. Each image also has
+a present fence in this path. Wait for queued present fences before reusing them or destroying
+swapchain resources; a signaled present fence proves resource-release safety, not screen scanout.
+
+These extensions are optional, not a new device suitability requirement. Without them, recreation
+and shutdown use the conventional `vkDeviceWaitIdle` compatibility path. This has a known
+presentation-completion specification gap and must not be described as strict lifetime proof.
+The default frame path performs no global idle waits. Diagnostics may explicitly disable the
+optional capability to exercise the fallback.
+
+Reference: [Khronos swapchain semaphore reuse and shutdown limitations](https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html).
 
 ## 8. Diagnostics and Failure Policy
 
@@ -178,6 +202,9 @@ M1 is ready for implementation planning only when the following acceptance crite
 - `--sample triangle` is the Vulkan acceptance command; `--sample smoke` remains the M0 platform-only command.
 - `WindowSurfaceApi::Vulkan` explicitly requests `SDL_WINDOW_VULKAN`; ordinary and future D3D12
   windows do not acquire that Vulkan dependency.
+- 2026-09-09: keep the Vulkan 1.3 baseline, use optional KHR/EXT swapchain-maintenance present
+  fences, and retain the explicitly limited compatibility fallback. Present semaphores belong
+  to swapchain images rather than frame slots.
 
 **Rejected**
 

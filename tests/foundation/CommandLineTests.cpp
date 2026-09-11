@@ -43,6 +43,40 @@ TEST_CASE("Missing sample name is invalid", "[command-line]")
     CHECK(parsed.error == "missing sample name after --sample");
 }
 
+TEST_CASE("Clear sample is accepted as a distinct command", "[command-line]")
+{
+    constexpr std::array arguments{
+        std::string_view{"--sample"},
+        std::string_view{"clear"},
+    };
+    const auto parsed = ParseCommandLine(arguments);
+    CHECK(parsed.command == Command::Clear);
+    CHECK(parsed.error.empty());
+}
+
+TEST_CASE("Clear sample rejects trailing arguments", "[command-line]")
+{
+    constexpr std::array arguments{
+        std::string_view{"--sample"},
+        std::string_view{"clear"},
+        std::string_view{"unexpected"},
+    };
+    const auto parsed = ParseCommandLine(arguments);
+    CHECK(parsed.command == Command::Invalid);
+    CHECK_FALSE(parsed.error.empty());
+}
+
+TEST_CASE("Unknown sample names are invalid", "[command-line]")
+{
+    constexpr std::array arguments{
+        std::string_view{"--sample"},
+        std::string_view{"unknown"},
+    };
+    const auto parsed = ParseCommandLine(arguments);
+    CHECK(parsed.command == Command::Invalid);
+    CHECK_FALSE(parsed.error.empty());
+}
+
 TEST_CASE("Unknown arguments are invalid", "[command-line]")
 {
     constexpr std::array arguments{std::string_view{"--unknown"}};

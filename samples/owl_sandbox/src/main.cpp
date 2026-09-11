@@ -1,3 +1,4 @@
+#include "ClearSample.h"
 #include "SmokeSample.h"
 
 #include <owl/foundation/CommandLine.h>
@@ -13,7 +14,8 @@ namespace
     {
         std::cout << "OwlSandbox\n"
                   << "  --help          Show this help\n"
-                  << "  --sample smoke  Run the M0 SDL3 smoke sample\n";
+                  << "  --sample smoke  Run the M0 SDL3 smoke sample\n"
+                  << "  --sample clear  Run the M1 Vulkan clear sample\n";
     }
 } // namespace
 
@@ -36,6 +38,8 @@ int main(const int argc, char* argv[])
         return 0;
     case owl::foundation::Command::Smoke:
         return owl::sandbox::RunSmokeSample();
+    case owl::foundation::Command::Clear:
+        return owl::sandbox::RunClearSample();
     case owl::foundation::Command::Invalid:
         std::cerr << "Error: " << parsed.error << "\n"
                   << "Run OwlSandbox --help for usage.\n";

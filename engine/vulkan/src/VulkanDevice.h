@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanDeviceSelection.h"
+#include "VulkanPresentationSupport.h"
 
 #include <optional>
 #include <string>
@@ -14,7 +15,7 @@ namespace owl::vulkan
         BuildDeviceQueueFamilyIndices(const QueueFamilySelection& selection, std::string& error);
     } // namespace detail
 
-    // Owns VkDevice; queues are borrowed from it. The parent VkInstance must outlive this owner.
+    // Owns VkDevice; physical device and queues are borrowed. VkInstance must outlive this owner.
     // Before destruction or move assignment, finish GPU work, destroy this device's children,
     // and ensure no concurrent host access to the device or its queues. No implicit wait is made.
     class VulkanDevice
@@ -30,20 +31,25 @@ namespace owl::vulkan
         VulkanDevice& operator=(VulkanDevice&& other) noexcept;
 
         [[nodiscard]] static std::optional<VulkanDevice>
-        Create(const VulkanDeviceSelection& selection, std::string& error);
+        Create(const VulkanDeviceSelection& selection, std::string& error,
+               const detail::PresentationSupportCapabilities& presentationSupport = {});
 
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] VkDevice Get() const noexcept;
+        [[nodiscard]] VkPhysicalDevice PhysicalDevice() const noexcept;
         [[nodiscard]] VkQueue GraphicsQueue() const noexcept;
         [[nodiscard]] VkQueue PresentQueue() const noexcept;
+        [[nodiscard]] bool HasPresentFences() const noexcept;
         [[nodiscard]] const detail::QueueFamilySelection& QueueFamilies() const noexcept;
 
     private:
         void Reset() noexcept;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
         VkQueue graphicsQueue_ = VK_NULL_HANDLE;
         VkQueue presentQueue_ = VK_NULL_HANDLE;
         detail::QueueFamilySelection queueFamilies_{};
+        detail::SwapchainMaintenance swapchainMaintenance_ = detail::SwapchainMaintenance::None;
     };
 } // namespace owl::vulkan

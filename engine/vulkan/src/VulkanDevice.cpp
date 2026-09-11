@@ -2,13 +2,81 @@
 
 #include <owl/foundation/Log.h>
 
+#include <algorithm>
 #include <array>
+#include <span>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace owl::vulkan
 {
+    namespace
+    {
+        [[nodiscard]] bool
+        HasExtension(const std::span<const VkExtensionProperties> availableExtensions,
+                     const std::string_view requestedName)
+        {
+            return std::ranges::any_of(
+                availableExtensions, [requestedName](const auto& extension)
+                { return std::string_view{extension.extensionName} == requestedName; });
+        }
+
+        [[nodiscard]] bool EnumerateDeviceExtensions(const VkPhysicalDevice physicalDevice,
+                                                     std::vector<VkExtensionProperties>& extensions,
+                                                     std::string& error)
+        {
+            std::uint32_t count = 0;
+            VkResult result =
+                vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr);
+            if (result != VK_SUCCESS)
+            {
+                error = "vkEnumerateDeviceExtensionProperties(count) failed with VkResult " +
+                        std::to_string(static_cast<int>(result));
+                return false;
+            }
+
+            do
+            {
+                extensions.resize(count);
+                VkExtensionProperties* data = count > 0 ? extensions.data() : nullptr;
+                result =
+                    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, data);
+            } while (result == VK_INCOMPLETE);
+
+            if (result != VK_SUCCESS)
+            {
+                error = "vkEnumerateDeviceExtensionProperties(data) failed with VkResult " +
+                        std::to_string(static_cast<int>(result));
+                return false;
+            }
+
+            extensions.resize(count);
+            return true;
+        }
+    } // namespace
+
     namespace detail
     {
+        SwapchainMaintenance
+        SelectSwapchainMaintenance(const PresentationSupportCapabilities& instanceSupport,
+                                   const SwapchainMaintenanceAvailability& deviceSupport) noexcept
+        {
+            if (!deviceSupport.feature)
+            {
+                return SwapchainMaintenance::None;
+            }
+            if (instanceSupport.khrSurfaceMaintenance1 && deviceSupport.khrExtension)
+            {
+                return SwapchainMaintenance::Khr;
+            }
+            if (instanceSupport.extSurfaceMaintenance1 && deviceSupport.extExtension)
+            {
+                return SwapchainMaintenance::Ext;
+            }
+            return SwapchainMaintenance::None;
+        }
+
         std::optional<std::vector<std::uint32_t>>
         BuildDeviceQueueFamilyIndices(const QueueFamilySelection& selection, std::string& error)
         {
@@ -40,9 +108,12 @@ namespace owl::vulkan
 
     VulkanDevice::VulkanDevice(VulkanDevice&& other) noexcept
         : device_(std::exchange(other.device_, VK_NULL_HANDLE)),
+          physicalDevice_(std::exchange(other.physicalDevice_, VK_NULL_HANDLE)),
           graphicsQueue_(std::exchange(other.graphicsQueue_, VK_NULL_HANDLE)),
           presentQueue_(std::exchange(other.presentQueue_, VK_NULL_HANDLE)),
-          queueFamilies_(std::exchange(other.queueFamilies_, detail::QueueFamilySelection{}))
+          queueFamilies_(std::exchange(other.queueFamilies_, detail::QueueFamilySelection{})),
+          swapchainMaintenance_(
+              std::exchange(other.swapchainMaintenance_, detail::SwapchainMaintenance::None))
     {
     }
 
@@ -52,15 +123,19 @@ namespace owl::vulkan
         {
             Reset();
             device_ = std::exchange(other.device_, VK_NULL_HANDLE);
+            physicalDevice_ = std::exchange(other.physicalDevice_, VK_NULL_HANDLE);
             graphicsQueue_ = std::exchange(other.graphicsQueue_, VK_NULL_HANDLE);
             presentQueue_ = std::exchange(other.presentQueue_, VK_NULL_HANDLE);
             queueFamilies_ = std::exchange(other.queueFamilies_, detail::QueueFamilySelection{});
+            swapchainMaintenance_ =
+                std::exchange(other.swapchainMaintenance_, detail::SwapchainMaintenance::None);
         }
         return *this;
     }
 
-    std::optional<VulkanDevice> VulkanDevice::Create(const VulkanDeviceSelection& selection,
-                                                     std::string& error)
+    std::optional<VulkanDevice>
+    VulkanDevice::Create(const VulkanDeviceSelection& selection, std::string& error,
+                         const detail::PresentationSupportCapabilities& presentationSupport)
     {
         if (selection.Get() == VK_NULL_HANDLE)
         {
@@ -87,12 +162,60 @@ namespace owl::vulkan
             };
         }
 
+        detail::SwapchainMaintenance maintenance = detail::SwapchainMaintenance::None;
+        VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenanceFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR,
+        };
+        if (presentationSupport.khrSurfaceMaintenance1 ||
+            presentationSupport.extSurfaceMaintenance1)
+        {
+            std::vector<VkExtensionProperties> availableExtensions;
+            if (!EnumerateDeviceExtensions(selection.Get(), availableExtensions, error))
+            {
+                return std::nullopt;
+            }
+
+            detail::SwapchainMaintenanceAvailability maintenanceAvailability{
+                .khrExtension = HasExtension(availableExtensions,
+                                             VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME),
+                .extExtension = HasExtension(availableExtensions,
+                                             VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME),
+            };
+            if ((presentationSupport.khrSurfaceMaintenance1 &&
+                 maintenanceAvailability.khrExtension) ||
+                (presentationSupport.extSurfaceMaintenance1 &&
+                 maintenanceAvailability.extExtension))
+            {
+                VkPhysicalDeviceFeatures2 availableFeatures{
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                    .pNext = &maintenanceFeatures,
+                };
+                vkGetPhysicalDeviceFeatures2(selection.Get(), &availableFeatures);
+                maintenanceAvailability.feature =
+                    maintenanceFeatures.swapchainMaintenance1 == VK_TRUE;
+            }
+            maintenance =
+                detail::SelectSwapchainMaintenance(presentationSupport, maintenanceAvailability);
+        }
+
+        maintenanceFeatures.swapchainMaintenance1 =
+            maintenance != detail::SwapchainMaintenance::None ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceVulkan13Features features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            .pNext =
+                maintenance != detail::SwapchainMaintenance::None ? &maintenanceFeatures : nullptr,
             .synchronization2 = VK_TRUE,
             .dynamicRendering = VK_TRUE,
         };
-        constexpr std::array extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        if (maintenance == detail::SwapchainMaintenance::Khr)
+        {
+            extensions.push_back(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        }
+        else if (maintenance == detail::SwapchainMaintenance::Ext)
+        {
+            extensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        }
         const VkDeviceCreateInfo createInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &features,
@@ -114,6 +237,8 @@ namespace owl::vulkan
 
         VulkanDevice device;
         device.device_ = handle;
+        device.physicalDevice_ = selection.Get();
+        device.swapchainMaintenance_ = maintenance;
         device.queueFamilies_ = selection.QueueFamilies();
         vkGetDeviceQueue(device.device_, *device.queueFamilies_.graphicsFamily, 0,
                          &device.graphicsQueue_);
@@ -126,7 +251,9 @@ namespace owl::vulkan
                 "' (queueFamilyCount=" + std::to_string(families->size()) +
                 ", graphicsQueueFamily=" + std::to_string(*device.queueFamilies_.graphicsFamily) +
                 ", presentQueueFamily=" + std::to_string(*device.queueFamilies_.presentFamily) +
-                ", extension=VK_KHR_swapchain, dynamicRendering=true, synchronization2=true)");
+                ", extension=VK_KHR_swapchain, presentFences=" +
+                (device.HasPresentFences() ? "true" : "false") +
+                ", dynamicRendering=true, synchronization2=true)");
         error.clear();
         return device;
     }
@@ -146,9 +273,19 @@ namespace owl::vulkan
         return graphicsQueue_;
     }
 
+    VkPhysicalDevice VulkanDevice::PhysicalDevice() const noexcept
+    {
+        return physicalDevice_;
+    }
+
     VkQueue VulkanDevice::PresentQueue() const noexcept
     {
         return presentQueue_;
+    }
+
+    bool VulkanDevice::HasPresentFences() const noexcept
+    {
+        return swapchainMaintenance_ != detail::SwapchainMaintenance::None;
     }
 
     const detail::QueueFamilySelection& VulkanDevice::QueueFamilies() const noexcept
@@ -163,8 +300,10 @@ namespace owl::vulkan
             vkDestroyDevice(device_, nullptr);
         }
         device_ = VK_NULL_HANDLE;
+        physicalDevice_ = VK_NULL_HANDLE;
         graphicsQueue_ = VK_NULL_HANDLE;
         presentQueue_ = VK_NULL_HANDLE;
         queueFamilies_ = {};
+        swapchainMaintenance_ = detail::SwapchainMaintenance::None;
     }
 } // namespace owl::vulkan

@@ -27,6 +27,11 @@ namespace owl::foundation
             return ParsedCommandLine{.command = Command::Smoke};
         }
 
+        if (arguments.size() == 2 && arguments[0] == "--sample" && arguments[1] == "clear")
+        {
+            return ParsedCommandLine{.command = Command::Clear};
+        }
+
         return ParsedCommandLine{
             .command = Command::Invalid,
             .error = "unknown command line",

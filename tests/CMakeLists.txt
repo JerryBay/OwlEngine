@@ -15,6 +15,8 @@ set(OWL_PLATFORM_TEST_SOURCES
 set(OWL_VULKAN_TEST_SOURCES
     vulkan/DeviceSelectionTests.cpp
     vulkan/DeviceTests.cpp
+    vulkan/FrameTests.cpp
+    vulkan/SwapchainTests.cpp
     vulkan/VulkanBootstrapTests.cpp
 )
 
@@ -32,6 +34,7 @@ source_group("vulkan" FILES ${OWL_VULKAN_TEST_SOURCES})
 
 target_include_directories(OwlUnitTests PRIVATE
     "${PROJECT_SOURCE_DIR}/engine/vulkan/src"
+    "${PROJECT_SOURCE_DIR}/engine/platform/src/sdl"
 )
 
 target_link_libraries(OwlUnitTests PRIVATE
@@ -43,4 +46,5 @@ target_link_libraries(OwlUnitTests PRIVATE
 )
 
 owl_enable_warnings(OwlUnitTests)
-catch_discover_tests(OwlUnitTests)
+# Keep discovered executable paths separate for each Visual Studio configuration.
+catch_discover_tests(OwlUnitTests DISCOVERY_MODE PRE_TEST)
