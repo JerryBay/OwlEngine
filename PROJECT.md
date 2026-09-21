@@ -126,6 +126,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - Use pinned vcpkg manifest dependencies. SDL3 remains behind `OwlPlatform`.
   - Update this file only for durable phase, capability, contract, workflow, validation, blocker,
     or next-task changes; do not use it as a chronological discussion log.
+  - Maintain `docs/learning/graphics-api-notes.md` for transferable low-level graphics API concepts.
+    Consolidate mechanisms and API differences, not individual questions, project details, or
+    inferred learner assessments. Consult relevant topics before explanations; update only for
+    durable knowledge and respect explicit read-only requests.
 - Open:
   - Select an open-source license before the first public release.
 - Known limitations:
@@ -160,6 +164,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Triangle entry/resources: `samples/owl_sandbox/src/TriangleSample.cpp`,
   `engine/vulkan/src/VulkanTrianglePipeline.cpp`, `samples/owl_sandbox/assets/m1/README.md`, and
   `docs/learning/m1-triangle.md`.
+- Low-level graphics API concepts: [graphics API notes](docs/learning/graphics-api-notes.md).
+  Keep engineering details and project validation status in their existing documents.
 - Current validation evidence: the VS2026 build/CTest and both-configuration GPU results above.
   Reproduce the GPU checks with the opt-in commands in `docs/building/windows.md`.
 
