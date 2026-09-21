@@ -32,6 +32,11 @@ namespace owl::foundation
             return ParsedCommandLine{.command = Command::Clear};
         }
 
+        if (arguments.size() == 2 && arguments[0] == "--sample" && arguments[1] == "triangle")
+        {
+            return ParsedCommandLine{.command = Command::Triangle};
+        }
+
         return ParsedCommandLine{
             .command = Command::Invalid,
             .error = "unknown command line",

@@ -2,6 +2,7 @@
 
 #include <owl/platform/Window.h>
 
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -41,6 +42,11 @@ namespace owl::platform
         Platform& operator=(Platform&& other) noexcept;
 
         [[nodiscard]] static std::optional<Platform> Create(std::string& error);
+
+        // Desktop executable base path for application-local assets; no video initialization
+        // needed.
+        [[nodiscard]] static std::optional<std::filesystem::path>
+        ExecutableDirectory(std::string& error);
 
         [[nodiscard]] std::optional<Window> CreateWindow(const WindowDesc& desc,
                                                          std::string& error) const;

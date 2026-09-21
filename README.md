@@ -16,10 +16,11 @@ Platform, and Sandbox targets; a visible SDL3 smoke sample; focused CPU and exec
 Windows CI coverage for Visual Studio 2022 and Visual Studio 2026.
 
 M1, native Vulkan bootstrap and frame lifecycle, is in progress. Instance, Surface, physical-device
-selection, logical Device, queues, Swapchain, and a two-frame clear/present loop are implemented.
+selection, logical Device, queues, Swapchain, and a two-frame clear/draw/present loop are implemented.
 Opt-in local integration tests exercise Dynamic Rendering, synchronization, resize, minimize,
-and restore, with optional presentation fences and a Vulkan 1.3 compatibility path. The triangle
-pipeline is next; Sandbox provides smoke and persistent Vulkan clear samples.
+and restore, with optional presentation fences and a Vulkan 1.3 compatibility path. Sandbox provides
+Smoke, Clear, and indexed Triangle samples. Triangle uses sample-local precompiled SPIR-V and a
+native Dynamic Rendering graphics pipeline; full M1 visual/validation/capture acceptance is pending.
 See [project status](PROJECT.md) for verification scope and the next task.
 
 ## Build, Test, and Run on Windows
@@ -39,6 +40,9 @@ ctest --preset windows-vs2022-debug
 
 # Run the M1 clear sample on a Vulkan 1.3-capable machine.
 ./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample clear
+
+# Run the indexed triangle with deployed precompiled shaders.
+./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample triangle
 ```
 
 See [Windows build instructions](docs/building/windows.md) for prerequisites, clean reconfigure,

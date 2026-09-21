@@ -183,10 +183,18 @@ Implemented ahead of triangle wiring to provide a persistent manual acceptance w
 - MSVC delay-loads the Loader. The Sandbox directory uses vcpkg's PowerShell deployment path to
   include delay imports without changing deployment for other targets.
 - VS2026 Debug and RelWithDebInfo build/default tests and four opt-in GPU tests pass. The Debug
-  interactive entry presents and exits normally. Manual pixels, validation-enabled runs, and
-  RenderDoc acceptance remain open; this is not triangle or full M1 acceptance.
+  interactive entry presents and exits normally. The user reported normal manual Clear checks on
+  2026-09-14. Independent capture, validation-enabled runs, and RenderDoc acceptance remain open;
+  this is not triangle or full M1 acceptance.
 
 ## Task 7: Add Triangle Assets and Pipeline
+
+**Implementation status (2026-09-14):** Implemented. Sample-local GLSL and validated SPIR-V,
+host-visible indexed geometry, an empty Pipeline Layout, and a Dynamic Rendering graphics pipeline
+are connected to the existing lifecycle. Dynamic viewport/scissor reuse the pipeline on extent-only
+resize; format changes rebuild it after idle. CPU tests and both-configuration GPU lifecycle tests
+pass. The user confirmed the triangle is visible. Remaining window checks and RenderDoc acceptance
+are open; see `PROJECT.md` for current evidence.
 
 **Files:**
 
@@ -210,6 +218,11 @@ Implemented ahead of triangle wiring to provide a persistent manual acceptance w
 capture shows the expected draw and presentation sequence.
 
 ## Task 8: Wire the Sandbox Command and Regression Tests
+
+**Implementation status (2026-09-14):** Implemented. `--sample triangle` resolves shader files
+beside the executable through Platform, and shares the Vulkan sample loop with Clear. Builds deploy
+the checked-in binaries for each configuration, including missing-output recovery. Parser/help,
+Platform failure, foreign-working-directory startup, and normal shutdown have been exercised.
 
 **Files:**
 

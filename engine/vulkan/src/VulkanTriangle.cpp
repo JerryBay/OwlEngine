@@ -6,6 +6,7 @@
 #include "VulkanInstance.h"
 #include "VulkanSurface.h"
 #include "VulkanSwapchain.h"
+#include "VulkanTrianglePipeline.h"
 
 #include <SDL3/SDL_video.h>
 #include <owl/foundation/Log.h>
@@ -24,6 +25,8 @@ namespace owl::vulkan
         VulkanDevice device;
         VulkanSwapchain swapchain;
         VulkanFrameResources frames;
+        VulkanTrianglePipeline triangle;
+        bool drawTriangle = false;
         VulkanTriangleStats stats;
         VkExtent2D lastRequestedExtent{};
         std::size_t frameIndex = 0;
@@ -144,6 +147,12 @@ namespace owl::vulkan
                 return result;
             }
             // Deferred/preflight failure preserves the old chain and its matching sync objects.
+            if (drawTriangle && !triangle.SetColorFormat(swapchain.SurfaceFormat().format, error))
+            {
+                failed = true;
+                failure = error;
+                return SwapchainUpdateResult::Failed;
+            }
             frames.ResetPresentResources();
             if (!frames.CreatePresentResources(swapchain.Images().size(), device.HasPresentFences(),
                                                error))
@@ -160,7 +169,7 @@ namespace owl::vulkan
             return SwapchainUpdateResult::Ready;
         }
 
-        bool RecordClear(const VulkanFrameSlot& slot, const std::uint32_t imageIndex,
+        bool RecordFrame(const VulkanFrameSlot& slot, const std::uint32_t imageIndex,
                          std::string& error)
         {
             if (!Check(vkResetCommandPool(device.Get(), slot.commandPool, 0), "vkResetCommandPool",
@@ -209,6 +218,8 @@ namespace owl::vulkan
                 .pColorAttachments = &attachment,
             };
             vkCmdBeginRendering(slot.commandBuffer, &rendering);
+            if (drawTriangle)
+                triangle.RecordDraw(slot.commandBuffer, swapchain.Extent());
             vkCmdEndRendering(slot.commandBuffer);
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -280,7 +291,7 @@ namespace owl::vulkan
             slot.acquisitionPending = true;
             recreateRequested = acquire == VK_SUBOPTIMAL_KHR;
             auto& image = frames.images[imageIndex];
-            if (!WaitPresent(image, error) || !RecordClear(slot, imageIndex, error))
+            if (!WaitPresent(image, error) || !RecordFrame(slot, imageIndex, error))
                 return FrameResult::Failed;
 
             const VkSemaphoreSubmitInfo wait{
@@ -314,6 +325,8 @@ namespace owl::vulkan
                 return FrameResult::Failed;
             slot.submissionPending = true;
             ++stats.submittedFrames;
+            if (drawTriangle)
+                ++stats.indexedDraws;
 
             const VkSwapchainKHR chain = swapchain.Get();
             const VkSwapchainPresentFenceInfoKHR presentFence{
@@ -383,6 +396,12 @@ namespace owl::vulkan
         if (!device)
             return std::nullopt;
         impl->device = std::move(*device);
+        if (options.triangleShaders)
+        {
+            if (!impl->triangle.Initialize(impl->device, *options.triangleShaders, error))
+                return std::nullopt;
+            impl->drawTriangle = true;
+        }
         if (!impl->frames.Initialize(impl->device.Get(),
                                      *impl->device.QueueFamilies().graphicsFamily, error))
             return std::nullopt;
@@ -393,8 +412,8 @@ namespace owl::vulkan
                                             : owl::foundation::LogLevel::Warning,
             "Vulkan",
             impl->device.HasPresentFences()
-                ? "Clear renderer uses per-image present fences for resource release"
-                : "Clear renderer uses WaitIdle compatibility fallback for WSI cleanup; strict "
+                ? "Renderer uses per-image present fences for resource release"
+                : "Renderer uses WaitIdle compatibility fallback for WSI cleanup; strict "
                   "presentation resource release is not guaranteed");
         error.clear();
         return VulkanTriangle{std::move(impl)};

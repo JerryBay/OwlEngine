@@ -9,6 +9,10 @@ target_sources(OwlSandbox PRIVATE
     src/ClearSample.h
     src/SmokeSample.cpp
     src/SmokeSample.h
+    src/TriangleSample.cpp
+    src/TriangleSample.h
+    src/VulkanSample.cpp
+    src/VulkanSample.h
 )
 
 target_link_libraries(OwlSandbox PRIVATE
@@ -27,6 +31,22 @@ set_target_properties(OwlSandbox PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
 )
 
+# Run for every requested Sandbox build, including asset-only updates and deleted outputs.
+# copy_if_different leaves unchanged deployment files untouched.
+add_custom_target(OwlSandboxAssets
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/assets/m1"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.vert.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.frag.spv"
+        "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/assets/m1"
+    DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.vert.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.frag.spv"
+    VERBATIM
+)
+add_dependencies(OwlSandbox OwlSandboxAssets)
+
 owl_enable_warnings(OwlSandbox)
 
 if(OWL_BUILD_TESTS)
@@ -35,7 +55,7 @@ if(OWL_BUILD_TESTS)
         COMMAND $<TARGET_FILE:OwlSandbox> --help
     )
     set_tests_properties(OwlSandbox.Help PROPERTIES
-        PASS_REGULAR_EXPRESSION "--sample clear"
+        PASS_REGULAR_EXPRESSION "--sample triangle"
     )
 
     add_test(
@@ -46,6 +66,17 @@ if(OWL_BUILD_TESTS)
             -DEXPECTED_EXIT_CODE=3
             -DPROGRAM_ARGUMENT=--sample
             -DPROGRAM_EXTRA_ARGUMENTS=clear
+            -P ${PROJECT_SOURCE_DIR}/tests/cmake/ExpectExitCode.cmake
+    )
+
+    add_test(
+        NAME OwlSandbox.TrianglePlatformFailure
+        COMMAND ${CMAKE_COMMAND} -E env SDL_VIDEODRIVER=owl-test-unavailable
+            ${CMAKE_COMMAND}
+            -DPROGRAM=$<TARGET_FILE:OwlSandbox>
+            -DEXPECTED_EXIT_CODE=3
+            -DPROGRAM_ARGUMENT=--sample
+            -DPROGRAM_EXTRA_ARGUMENTS=triangle
             -P ${PROJECT_SOURCE_DIR}/tests/cmake/ExpectExitCode.cmake
     )
 

@@ -68,7 +68,7 @@ ctest --preset windows-vs2026-debug -R "^Vulkan .* locally$" -V
 Remove-Item Env:OWL_RUN_VULKAN_BOOTSTRAP_TEST
 ```
 
-These tests briefly create SDL windows and verify four scopes:
+These tests briefly create SDL windows and verify five scopes:
 
 - Instance and Surface lifetime.
 - Physical-device selection, Device and graphics/present queues, and move/replacement/destruction.
@@ -77,6 +77,9 @@ These tests briefly create SDL windows and verify four scopes:
 - Clear rendering: acquire, Dynamic Rendering attachment clear, Synchronization2 submission,
   present, rendered resize, minimized deferral, restoration, and explicit idle/cleanup. Each of
   the automatic presentation-fence and forced compatibility modes presents 300 frames.
+- Indexed triangle rendering: the same frame/resize/minimize/restore and move/cleanup checks,
+  with 300 presented frames per synchronization mode. Submitted draw counts are checked; this
+  alone is not a pixel-output comparison. These tests read checked-in shaders from the source tree.
 
 The resource-only swapchain test explicitly passes a zero extent because SDL can retain a
 nonzero pixel size while minimized. The clear renderer also checks actual minimized/hidden
@@ -133,6 +136,27 @@ On MSVC, Sandbox delay-loads `vulkan-1.dll`, preserving the non-Vulkan startup p
 the default command, and `--sample smoke`. Its build uses vcpkg's PowerShell app-local deployer
 because the pinned native deployer skips delay imports. Each configuration copies its matching
 Vulkan Loader beside the executable; this does not install a GPU driver or a Validation Layer.
+
+## Run the Indexed Triangle Sample
+
+```powershell
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle
+$LASTEXITCODE
+```
+
+Expected output is a centered RGB triangle over the green clear color. Check resizing, maximizing,
+minimizing/restoring, and Escape/window-close exit as for Clear. The exit log also reports submitted
+indexed draws. Missing or invalid Shader assets report the path and return code 4.
+
+Shader paths resolve from the executable directory through Platform, not the current working
+directory. Build copies both `.spv` files into `bin/<configuration>/assets/m1/` on every requested
+Sandbox build, including asset-only updates and missing outputs. Keep that directory with the
+executable when moving the runtime bundle. Smoke and Clear do not read these files.
+
+The ordinary build requires no shader compiler. To edit shaders, see the adjacent
+[shader sources and regeneration instructions](../../samples/owl_sandbox/assets/m1/README.md).
+The first pipeline's [ownership and memory notes](../learning/m1-triangle.md) explain its deliberate
+limits; general shader compilation, reflection, and resource allocation systems remain later work.
 
 ## Reconfigure from a Clean Build Directory
 

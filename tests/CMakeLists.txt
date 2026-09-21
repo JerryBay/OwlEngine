@@ -17,6 +17,7 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/DeviceTests.cpp
     vulkan/FrameTests.cpp
     vulkan/SwapchainTests.cpp
+    vulkan/TrianglePipelineTests.cpp
     vulkan/VulkanBootstrapTests.cpp
 )
 
@@ -46,5 +47,8 @@ target_link_libraries(OwlUnitTests PRIVATE
 )
 
 owl_enable_warnings(OwlUnitTests)
+target_compile_definitions(OwlUnitTests PRIVATE
+    OWL_TRIANGLE_TEST_ASSET_DIR="${PROJECT_SOURCE_DIR}/samples/owl_sandbox/assets/m1"
+)
 # Keep discovered executable paths separate for each Visual Studio configuration.
 catch_discover_tests(OwlUnitTests DISCOVERY_MODE PRE_TEST)

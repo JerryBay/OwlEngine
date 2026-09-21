@@ -49,6 +49,21 @@ namespace owl::platform
         return Platform{true};
     }
 
+    std::optional<std::filesystem::path> Platform::ExecutableDirectory(std::string& error)
+    {
+        const char* basePath = SDL_GetBasePath();
+        if (basePath == nullptr)
+        {
+            error = std::string{"SDL_GetBasePath failed: "} + SDL_GetError();
+            return std::nullopt;
+        }
+
+        // SDL returns UTF-8. Preserve it when constructing a native Windows filesystem path.
+        const std::u8string utf8Path{basePath, basePath + std::char_traits<char>::length(basePath)};
+        error.clear();
+        return std::filesystem::path{utf8Path};
+    }
+
     EventPumpResult Platform::PumpEvents() const noexcept
     {
         SDL_Event event{};

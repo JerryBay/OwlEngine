@@ -74,101 +74,123 @@ TEST_CASE("Clear renderer rejects invalid windows and use after move", "[vulkan]
     CHECK(error.empty());
 }
 
+namespace
+{
+    void RunLocalFrames(const bool triangle)
+    {
+        const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
+        if (enabled == nullptr || std::string_view{enabled} != "1")
+            SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to exercise local clear presentation");
+
+        struct LoggingScope
+        {
+            LoggingScope()
+            {
+                owl::foundation::InitializeLogging();
+            }
+            ~LoggingScope()
+            {
+                owl::foundation::ShutdownLogging();
+            }
+        } logging;
+        bool usePresentFences = true;
+        SECTION("automatic present-fence capability") {}
+        SECTION("explicit compatibility fallback")
+        {
+            usePresentFences = false;
+        }
+        std::string error;
+        auto platform = owl::platform::Platform::Create(error);
+        INFO(error);
+        REQUIRE(platform);
+        auto window =
+            platform->CreateWindow({.title = "OwlEngine - M1 Vulkan Clear",
+                                    .width = 640,
+                                    .height = 360,
+                                    .resizable = true,
+                                    .surfaceApi = owl::platform::WindowSurfaceApi::Vulkan},
+                                   error);
+        REQUIRE(window);
+        owl::vulkan::VulkanTriangleOptions options{.enablePresentFences = usePresentFences};
+        if (triangle)
+        {
+            const std::filesystem::path assets{OWL_TRIANGLE_TEST_ASSET_DIR};
+            options.triangleShaders = owl::vulkan::TriangleShaderPaths{
+                assets / "triangle.vert.spv", assets / "triangle.frag.spv"};
+        }
+        auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error, options);
+        INFO(error);
+        REQUIRE(renderer);
+        REQUIRE(renderer->IsValid());
+        if (!usePresentFences)
+            CHECK_FALSE(renderer->Stats().presentFencesEnabled);
+
+        const auto renderFrames = [&](std::uint64_t count)
+        {
+            const auto target = renderer->Stats().presentedFrames + count;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+            while (renderer->Stats().presentedFrames < target &&
+                   std::chrono::steady_clock::now() < deadline)
+            {
+                REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
+                const auto result = renderer->RenderFrame(error);
+                INFO(error);
+                REQUIRE(result != owl::vulkan::FrameResult::Failed);
+                if (result == owl::vulkan::FrameResult::Deferred)
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE(renderer->Stats().presentedFrames == target);
+            CHECK(error.empty());
+        };
+        renderFrames(120);
+        const auto initial = renderer->Stats();
+        REQUIRE(initial.indexedDraws == (triangle ? initial.submittedFrames : 0));
+        owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
+        CHECK_FALSE(renderer->IsValid());
+        CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Failed);
+        *renderer = std::move(moved);
+        CHECK_FALSE(moved.IsValid());
+
+        SDL_Window* native = owl::platform::SDLWindowAccess::Get(*window);
+        REQUIRE(native != nullptr);
+        for (const auto [width, height] : {std::pair{800, 450}, std::pair{480, 270}})
+        {
+            const auto previousGeneration = renderer->Stats().swapchainGeneration;
+            REQUIRE(SDL_SetWindowSize(native, width, height));
+            REQUIRE(SDL_SyncWindow(native));
+            renderFrames(30);
+            CHECK(renderer->Stats().swapchainGeneration > previousGeneration);
+            const auto pixels = window->GetFramebufferExtent();
+            REQUIRE(pixels);
+            CHECK(renderer->Stats().width == static_cast<std::uint32_t>(pixels->width));
+            CHECK(renderer->Stats().height == static_cast<std::uint32_t>(pixels->height));
+        }
+        REQUIRE(SDL_MinimizeWindow(native));
+        REQUIRE(SDL_SyncWindow(native));
+        REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
+        const auto beforeMinimized = renderer->Stats();
+        for (int frame = 0; frame < 4; ++frame)
+            CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Deferred);
+        CHECK(renderer->Stats().submittedFrames == beforeMinimized.submittedFrames);
+        CHECK(renderer->Stats().swapchainGeneration == beforeMinimized.swapchainGeneration);
+        REQUIRE(SDL_RestoreWindow(native));
+        REQUIRE(SDL_SyncWindow(native));
+        renderFrames(120);
+        REQUIRE(renderer->WaitIdle(error));
+        CHECK(renderer->Stats().submittedFrames >= renderer->Stats().presentedFrames);
+        CHECK(renderer->Stats().presentedFrames > initial.presentedFrames);
+        CHECK(renderer->Stats().indexedDraws == (triangle ? renderer->Stats().submittedFrames : 0));
+        renderer.reset();
+        CHECK(window->IsValid());
+    }
+} // namespace
+
 TEST_CASE("Vulkan clear frames resize and recover locally", "[vulkan][integration][frame]")
 {
-    const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
-    if (enabled == nullptr || std::string_view{enabled} != "1")
-        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to exercise local clear presentation");
+    RunLocalFrames(false);
+}
 
-    struct LoggingScope
-    {
-        LoggingScope()
-        {
-            owl::foundation::InitializeLogging();
-        }
-        ~LoggingScope()
-        {
-            owl::foundation::ShutdownLogging();
-        }
-    } logging;
-    bool usePresentFences = true;
-    SECTION("automatic present-fence capability") {}
-    SECTION("explicit compatibility fallback")
-    {
-        usePresentFences = false;
-    }
-    std::string error;
-    auto platform = owl::platform::Platform::Create(error);
-    INFO(error);
-    REQUIRE(platform);
-    auto window = platform->CreateWindow({.title = "OwlEngine - M1 Vulkan Clear",
-                                          .width = 640,
-                                          .height = 360,
-                                          .resizable = true,
-                                          .surfaceApi = owl::platform::WindowSurfaceApi::Vulkan},
-                                         error);
-    REQUIRE(window);
-    auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error,
-                                                        {.enablePresentFences = usePresentFences});
-    INFO(error);
-    REQUIRE(renderer);
-    REQUIRE(renderer->IsValid());
-    if (!usePresentFences)
-        CHECK_FALSE(renderer->Stats().presentFencesEnabled);
-
-    const auto renderFrames = [&](std::uint64_t count)
-    {
-        const auto target = renderer->Stats().presentedFrames + count;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
-        while (renderer->Stats().presentedFrames < target &&
-               std::chrono::steady_clock::now() < deadline)
-        {
-            REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
-            const auto result = renderer->RenderFrame(error);
-            INFO(error);
-            REQUIRE(result != owl::vulkan::FrameResult::Failed);
-            if (result == owl::vulkan::FrameResult::Deferred)
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        }
-        REQUIRE(renderer->Stats().presentedFrames == target);
-        CHECK(error.empty());
-    };
-    renderFrames(120);
-    const auto initial = renderer->Stats();
-    owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
-    CHECK_FALSE(renderer->IsValid());
-    CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Failed);
-    *renderer = std::move(moved);
-    CHECK_FALSE(moved.IsValid());
-
-    SDL_Window* native = owl::platform::SDLWindowAccess::Get(*window);
-    REQUIRE(native != nullptr);
-    for (const auto [width, height] : {std::pair{800, 450}, std::pair{480, 270}})
-    {
-        const auto previousGeneration = renderer->Stats().swapchainGeneration;
-        REQUIRE(SDL_SetWindowSize(native, width, height));
-        REQUIRE(SDL_SyncWindow(native));
-        renderFrames(30);
-        CHECK(renderer->Stats().swapchainGeneration > previousGeneration);
-        const auto pixels = window->GetFramebufferExtent();
-        REQUIRE(pixels);
-        CHECK(renderer->Stats().width == static_cast<std::uint32_t>(pixels->width));
-        CHECK(renderer->Stats().height == static_cast<std::uint32_t>(pixels->height));
-    }
-    REQUIRE(SDL_MinimizeWindow(native));
-    REQUIRE(SDL_SyncWindow(native));
-    REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
-    const auto beforeMinimized = renderer->Stats();
-    for (int frame = 0; frame < 4; ++frame)
-        CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Deferred);
-    CHECK(renderer->Stats().submittedFrames == beforeMinimized.submittedFrames);
-    CHECK(renderer->Stats().swapchainGeneration == beforeMinimized.swapchainGeneration);
-    REQUIRE(SDL_RestoreWindow(native));
-    REQUIRE(SDL_SyncWindow(native));
-    renderFrames(120);
-    REQUIRE(renderer->WaitIdle(error));
-    CHECK(renderer->Stats().submittedFrames >= renderer->Stats().presentedFrames);
-    CHECK(renderer->Stats().presentedFrames > initial.presentedFrames);
-    renderer.reset();
-    CHECK(window->IsValid());
+TEST_CASE("Vulkan triangle frames resize and recover locally", "[vulkan][integration][triangle]")
+{
+    RunLocalFrames(true);
 }

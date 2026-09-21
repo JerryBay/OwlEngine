@@ -66,6 +66,29 @@ TEST_CASE("Clear sample rejects trailing arguments", "[command-line]")
     CHECK_FALSE(parsed.error.empty());
 }
 
+TEST_CASE("Triangle sample is accepted as a distinct command", "[command-line]")
+{
+    constexpr std::array arguments{
+        std::string_view{"--sample"},
+        std::string_view{"triangle"},
+    };
+    const auto parsed = ParseCommandLine(arguments);
+    CHECK(parsed.command == Command::Triangle);
+    CHECK(parsed.error.empty());
+}
+
+TEST_CASE("Triangle sample rejects trailing arguments", "[command-line]")
+{
+    constexpr std::array arguments{
+        std::string_view{"--sample"},
+        std::string_view{"triangle"},
+        std::string_view{"unexpected"},
+    };
+    const auto parsed = ParseCommandLine(arguments);
+    CHECK(parsed.command == Command::Invalid);
+    CHECK_FALSE(parsed.error.empty());
+}
+
 TEST_CASE("Unknown sample names are invalid", "[command-line]")
 {
     constexpr std::array arguments{

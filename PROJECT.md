@@ -14,10 +14,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
 - Current phase: M1, native Vulkan 1.3 bootstrap and frame lifecycle.
-- Current implementation boundary: M1 Tasks 1-6 are implemented through clear-color presentation.
+- Current implementation boundary: M1 Tasks 1-8 are implemented through indexed-triangle presentation.
   Local integration tests reach the full native Vulkan frame lifecycle and window-driven
-  recreation. Sandbox now provides smoke and persistent clear samples; the triangle pipeline and
-  its Sandbox entry remain pending. This is not full M1 acceptance.
+  recreation. Sandbox provides Smoke, Clear, and Triangle samples. Visual, validation-enabled, and
+  RenderDoc acceptance remain separate checks. This is not full M1 acceptance.
 
 ## Implemented Baseline
 
@@ -33,8 +33,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     borrowed graphics/present queue handles, and an opt-in real-GPU lifetime test in `OwlUnitTests`.
   - Move-only `VulkanSwapchain`, fresh Surface capability/format/mode queries, image views,
     local recreation, zero-extent deferral, and opt-in real-GPU resource lifecycle tests.
-  - `VulkanTriangle` lifecycle, currently clear-only: two frame slots, command pools/buffers,
-    acquire, Dynamic Rendering clear, Synchronization2 submit, and present. Slot acquisition and
+  - `VulkanTriangle` lifecycle: two frame slots, command pools/buffers, acquire, Dynamic Rendering
+    clear and optional indexed draw, Synchronization2 submit, and present. Slot acquisition and
     submission fences track cleanup independently; present semaphores belong to swapchain images.
   - Optional KHR/EXT swapchain-maintenance feature/dependency negotiation and per-image present
     fences, with a diagnostic option to force the compatibility fallback. Window resize and
@@ -42,15 +42,20 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - `OwlSandbox --sample clear`: persistent resizable Vulkan window, event polling, paced frames,
     Escape/close handling, reported errors, and renderer-before-window teardown. Default command
     remains Smoke. MSVC delay-load and app-local deployment preserve non-Vulkan startup paths.
+  - `--sample triangle`, sample-local GLSL/precompiled SPIR-V, host-visible vertex/index geometry,
+    and a private `VulkanTrianglePipeline`. Dynamic viewport/scissor preserve the pipeline across
+    extent-only changes; color-format changes rebuild it after idle. No shader system or RHI.
+  - `Platform::ExecutableDirectory()` supports executable-relative Sandbox asset lookup. Both
+    Vulkan samples share the Sandbox event loop; Clear has no shader asset requirement.
 - Verified:
-  - 2026-09-11, VS2026 Debug and RelWithDebInfo: both build presets succeeded; each default CTest
-    preset reported 53 passed, 4 opt-in GPU tests skipped, and 0 failed.
-  - Both configurations passed all four GPU tests with `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1` on
+  - 2026-09-14, VS2026 Debug and RelWithDebInfo: both build presets succeeded; each default CTest
+    preset reported 58 passed, 5 opt-in GPU tests skipped, and 0 failed.
+  - Both configurations passed all five GPU tests with `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1` on
     NVIDIA GeForce RTX 5060 (reported API 1.4.341, unified family 0; loader 1.4.350).
     Swapchain checks cover 320x180, 640x360, and 480x270, moves including live-owner replacement,
     preflight failure preservation, explicit zero-size deferral on minimize, and recreation on
     restore. Each created swapchain had 3 images/views; device-level objects remained unchanged.
-  - Clear-renderer tests presented 300 frames per mode with automatic present fences enabled
+  - Clear and triangle tests each presented 300 frames per mode with automatic present fences enabled
     and explicitly disabled: 640x360, resize to 800x450 and 480x270, minimize without submission,
     restore, move, idle, and cleanup. Both modes passed in both configurations.
   - Catch2 discovery now uses `PRE_TEST`: after building both configurations, CTest JSON listings
@@ -62,6 +67,16 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     matched their vcpkg package DLLs. A running Debug Smoke process had no Vulkan Loader module
     and exited with code 0 through the window-close path.
   - The user previously confirmed the temporary 640x360 green clear probe visually.
+  - 2026-09-14: the user reported normal results for the formal Clear sample's manual checks.
+    This records user-reported acceptance, not an independent capture or validation-layer run.
+  - Formal Debug Triangle launched from a different working directory, presented 10,820 frames,
+    and exited with code 0 via Escape without Validation Layer. Missing deployed fragment SPIR-V
+    reported its path and returned code 4; rebuilding restored the generated asset. Both runtime
+    configurations' deployed shader hashes matched the checked-in assets.
+  - GLSL compiled and validated using pinned glslang 16.5.0 for Vulkan 1.3/SPIR-V 1.6. Stage linking
+    and repeated binary hashes passed; source, binary, and regeneration instructions are checked in.
+  - 2026-09-14: the user confirmed the triangle is visible in the formal sample. This establishes
+    user-reported visual output, not independent pixel inspection or validation-layer coverage.
 - Unverified:
   - The current revision on VS2022; validate it on the separate VS2022 computer.
   - GPU creation on hardware with separate graphics/present families (CPU policy tests cover it),
@@ -69,17 +84,22 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - Native resource/submit/fence failure injection and driver-returned out-of-date recovery;
     policy branches and synchronization/lifetime code are tested/reviewed, not fault-injected.
   - RenderDoc clear-frame capture: local injection could not connect to the target and produced
-    no capture. The formal Clear entry still needs manual visual acceptance; this machine's
-    desktop screenshot tool failed with an unsupported capture interface, so no new pixel
-    inspection was claimed.
-  - Triangle, 10,000-frame validation run, and full M1 RenderDoc acceptance.
+    no capture. Independent pixel inspection remains unverified; the desktop screenshot tool
+    failed with an unsupported capture interface. User-reported manual acceptance is recorded above.
+  - Triangle capture is also pending: RenderDoc injection disconnected. Logs show installed 1.26
+    Vulkan Layer mixed with the MCP package's 1.43. Disabling the old layer only for a child process
+    avoided the early disconnect but did not establish capture. No system Layer registration changed.
+  - Independent triangle pixel inspection, a 10,000-frame validation-enabled run, and full M1
+    RenderDoc acceptance. The user has confirmed triangle visibility; detailed window checks remain.
+  - Native non-coherent flush and live color-format replacement paths: policy/static review covers
+    them, but this GPU selected coherent memory and resizing retained the color format.
 
 ## Milestones
 
 | Milestone | Delivery | Validation | Completion condition |
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
-| M1 Vulkan Bootstrap and Frame Lifecycle | In progress: bootstrap through clear/present and rendered window recovery implemented | CPU tests and Debug/RelWithDebInfo GPU tests pass in both presentation modes without Validation Layer | Triangle, rendered resize/minimize recovery, 10,000 validation-clean frames, and RenderDoc capture |
+| M1 Vulkan Bootstrap and Frame Lifecycle | Implemented through indexed triangle and rendered window recovery; acceptance pending | CPU tests and Debug/RelWithDebInfo GPU tests pass in both presentation modes without Validation Layer | Visual triangle acceptance, 10,000 validation-clean frames, and RenderDoc capture |
 | M2-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -117,7 +137,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     flags as well as pixel size. Surface/device loss is terminal; automatic recovery is deferred.
   - Presentation fences establish resource release, not display scanout completion. Compatibility
     fallback runs successfully locally but lacks the same specification-level release guarantee.
-  - Triangle drawing and its dedicated Sandbox command are pending.
+  - Triangle geometry uses a small immutable host-visible allocation; staging/upload allocation,
+    general Shader System, and RHI are intentionally deferred.
 
 ## Entry Points and Evidence
 
@@ -136,15 +157,15 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `tests/vulkan/FrameTests.cpp`
 - Interactive clear entry: `samples/owl_sandbox/src/ClearSample.cpp`; launch and manual checks
   are documented in `docs/building/windows.md`.
+- Triangle entry/resources: `samples/owl_sandbox/src/TriangleSample.cpp`,
+  `engine/vulkan/src/VulkanTrianglePipeline.cpp`, `samples/owl_sandbox/assets/m1/README.md`, and
+  `docs/learning/m1-triangle.md`.
 - Current validation evidence: the VS2026 build/CTest and both-configuration GPU results above.
   Reproduce the GPU checks with the opt-in commands in `docs/building/windows.md`.
 
 ## Next Work
 
-- Next task: M1 Task 7, sample-local precompiled SPIR-V assets, an indexed-triangle buffer, and a
-  Dynamic Rendering graphics pipeline on the existing frame lifecycle. Task 8 adds the triangle
-  command; the clear command is already available for manual acceptance. Follow the approved M1
-  shader scope rather than introducing a shader build system here.
-- Acceptance condition: visible triangle, pipeline/shader lifetime correctness, deterministic asset
-  deployment, and unchanged window recovery behavior. Keep RHI outside this slice. A
-  validation-enabled run and the full 10,000-frame/RenderDoc acceptance remain required for M1.
+- Next task: M1 Task 9 acceptance, including remaining manual window checks, a validation-enabled
+  10,000-frame run, and a RenderDoc capture with the indexed draw and expected output.
+- Keep the native Vulkan baseline and the existing clear/smoke regressions. VS2022 validation
+  belongs to the separate workstation. Do not mark M1 complete from build or unvalidated GPU passes.

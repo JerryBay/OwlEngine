@@ -18,6 +18,8 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanSwapchain.cpp
     src/VulkanSwapchain.h
     src/VulkanTriangle.cpp
+    src/VulkanTrianglePipeline.cpp
+    src/VulkanTrianglePipeline.h
 )
 
 target_include_directories(OwlVulkan

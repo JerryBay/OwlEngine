@@ -11,6 +11,7 @@ namespace owl::foundation
         Help,
         Smoke,
         Clear,
+        Triangle,
         Invalid,
     };
 

@@ -1,5 +1,6 @@
 #include "ClearSample.h"
 #include "SmokeSample.h"
+#include "TriangleSample.h"
 
 #include <owl/foundation/CommandLine.h>
 
@@ -13,9 +14,10 @@ namespace
     void PrintHelp()
     {
         std::cout << "OwlSandbox\n"
-                  << "  --help          Show this help\n"
-                  << "  --sample smoke  Run the M0 SDL3 smoke sample\n"
-                  << "  --sample clear  Run the M1 Vulkan clear sample\n";
+                  << "  --help             Show this help\n"
+                  << "  --sample smoke     Run the M0 SDL3 smoke sample\n"
+                  << "  --sample clear     Run the M1 Vulkan clear sample\n"
+                  << "  --sample triangle  Run the M1 Vulkan triangle sample\n";
     }
 } // namespace
 
@@ -40,6 +42,8 @@ int main(const int argc, char* argv[])
         return owl::sandbox::RunSmokeSample();
     case owl::foundation::Command::Clear:
         return owl::sandbox::RunClearSample();
+    case owl::foundation::Command::Triangle:
+        return owl::sandbox::RunTriangleSample();
     case owl::foundation::Command::Invalid:
         std::cerr << "Error: " << parsed.error << "\n"
                   << "Run OwlSandbox --help for usage.\n";
