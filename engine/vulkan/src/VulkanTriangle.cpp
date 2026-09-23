@@ -182,10 +182,11 @@ namespace owl::vulkan
             if (!Check(vkBeginCommandBuffer(slot.commandBuffer, &begin), "vkBeginCommandBuffer",
                        error))
                 return false;
-            // Each frame discards the previous contents; acquisition still orders this transition.
+            // Match the acquire semaphore wait stage so the layout transition happens after it.
+            // Discarding the previous contents does not remove this execution dependency.
             VkImageMemoryBarrier2 barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 .srcAccessMask = VK_ACCESS_2_NONE,
                 .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,

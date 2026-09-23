@@ -61,7 +61,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - Catch2 discovery now uses `PRE_TEST`: after building both configurations, CTest JSON listings
     and verbose GPU runs confirm each preset selects its own executable. The previous shared
     post-build list could select the last-built configuration instead of the requested one.
-  - Validation Layer was unavailable; GPU passes are runtime evidence without validation coverage.
+  - Validation Layer was unavailable during the 2026-09-14 runs; those GPU passes do not establish
+    validation coverage. See the newer validation-enabled result below.
   - The formal Debug Clear entry presented 4,980 frames and exited with code 0 via Escape.
     Its loaded module was the app-local Vulkan Loader; both deployed configurations' DLL hashes
     matched their vcpkg package DLLs. A running Debug Smoke process had no Vulkan Loader module
@@ -77,20 +78,36 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     and repeated binary hashes passed; source, binary, and regeneration instructions are checked in.
   - 2026-09-14: the user confirmed the triangle is visible in the formal sample. This establishes
     user-reported visual output, not independent pixel inspection or validation-layer coverage.
+  - 2026-09-23, VS2026 Debug: RenderDoc 1.46 captured and replayed the formal Clear sample with
+    the expected green output. The existing MCP's 1.43 replay runtime rejected that newer format.
+  - RenderDoc 1.43 then captured the formal Triangle sample on NVIDIA GeForce RTX 5060. The target
+    loaded only the intended 1.43 capture DLL and closed normally with exit code 0. Existing MCP
+    opened the capture, reported one indexed draw (3 indices, 1 instance), queried VS/PS reflection
+    and the 1280x720 sRGB target, and exported the expected colored triangle. Pixel reads passed.
+    Capture used RenderDoc target control; MCP file replay/query/export passed, not its automatic
+    launch tool. No captured debug messages were reported; this does not establish validation-layer
+    coverage. Capture-layer selection was process-local; system registration was not changed.
+  - 2026-09-23, VS2026: configure and Debug/RelWithDebInfo builds succeeded. Each default CTest
+    preset passed 58 tests and skipped the five opt-in GPU tests. With Khronos Validation Layer
+    1.4.357 and synchronization/submit-time validation enabled, each configuration passed all five
+    GPU test cases with zero validation errors and warnings after correcting the acquire-to-layout
+    transition dependency. Tests cover automatic presentation fences and forced compatibility mode.
+  - CTest now rejects `[error] [VulkanValidation]` output. The rule rejected the original
+    RelWithDebInfo binary's Clear/Triangle tests with exit code 8, then passed with exit code 0
+    after rebuilding the correction. Direct test/Sandbox execution still requires log inspection.
+  - The corrected formal Debug Triangle presented 12,124 frames/indexed draws and exited with
+    code 0; Clear presented 707 frames and Smoke also exited with code 0. Programmatic resize,
+    maximize, minimize, restore, and close/Escape completed; both Vulkan samples reached swapchain
+    generation 5. Complete logs contained zero validation errors or warnings. Recording overlays
+    were disabled for these diagnostic processes; SDK layer registration was not changed.
 - Unverified:
   - The current revision on VS2022; validate it on the separate VS2022 computer.
-  - GPU creation on hardware with separate graphics/present families (CPU policy tests cover it),
-    and a validation-enabled GPU run.
+  - GPU creation on hardware with separate graphics/present families (CPU policy tests cover it).
   - Native resource/submit/fence failure injection and driver-returned out-of-date recovery;
     policy branches and synchronization/lifetime code are tested/reviewed, not fault-injected.
-  - RenderDoc clear-frame capture: local injection could not connect to the target and produced
-    no capture. Independent pixel inspection remains unverified; the desktop screenshot tool
-    failed with an unsupported capture interface. User-reported manual acceptance is recorded above.
-  - Triangle capture is also pending: RenderDoc injection disconnected. Logs show installed 1.26
-    Vulkan Layer mixed with the MCP package's 1.43. Disabling the old layer only for a child process
-    avoided the early disconnect but did not establish capture. No system Layer registration changed.
-  - Independent triangle pixel inspection, a 10,000-frame validation-enabled run, and full M1
-    RenderDoc acceptance. The user has confirmed triangle visibility; detailed window checks remain.
+  - Complete client-edge inspection during continuous manual dragging. Programmatic window
+    recovery and a 10,000-frame validation-clean run are verified; partial desktop snapshots do
+    not certify every border pixel. The existing RenderDoc/MCP capture predates the barrier fix.
   - Native non-coherent flush and live color-format replacement paths: policy/static review covers
     them, but this GPU selected coherent memory and resizing retained the color format.
 
@@ -99,7 +116,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | Milestone | Delivery | Validation | Completion condition |
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
-| M1 Vulkan Bootstrap and Frame Lifecycle | Implemented through indexed triangle and rendered window recovery; acceptance pending | CPU tests and Debug/RelWithDebInfo GPU tests pass in both presentation modes without Validation Layer | Visual triangle acceptance, 10,000 validation-clean frames, and RenderDoc capture |
+| M1 Vulkan Bootstrap and Frame Lifecycle | Implemented through indexed triangle and rendered window recovery; final visual checks pending | Both configurations' CPU/GPU tests and Debug 12,124-frame synchronization-validation run pass; earlier RenderDoc/MCP inspection passes | Visual triangle acceptance, 10,000 validation-clean frames, and RenderDoc capture |
 | M2-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -168,10 +185,14 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   Keep engineering details and project validation status in their existing documents.
 - Current validation evidence: the VS2026 build/CTest and both-configuration GPU results above.
   Reproduce the GPU checks with the opt-in commands in `docs/building/windows.md`.
+  Local RenderDoc 1.43 capture, MCP-exported PNG, and inspection results are under `build/diagnostics/`.
+- Validation setup and acceptance findings: `docs/learning/m1-vulkan-bootstrap.md`; detailed
+  2026-09-23 logs are in `build/diagnostics/m1-validation-20260923/` (local, ignored). Use
+  `fixed-gpu/`, `fixed-sandbox/`, and `fixed-verification.md` for the corrected implementation.
 
 ## Next Work
 
-- Next task: M1 Task 9 acceptance, including remaining manual window checks, a validation-enabled
-  10,000-frame run, and a RenderDoc capture with the indexed draw and expected output.
+- Next task: finish the remaining manual window visual checks and consolidate M1 acceptance.
+  Preserve the RenderDoc/MCP inspection baseline; M2 resource/memory/upload design follows M1.
 - Keep the native Vulkan baseline and the existing clear/smoke regressions. VS2022 validation
   belongs to the separate workstation. Do not mark M1 complete from build or unvalidated GPU passes.

@@ -51,4 +51,8 @@ target_compile_definitions(OwlUnitTests PRIVATE
     OWL_TRIANGLE_TEST_ASSET_DIR="${PROJECT_SOURCE_DIR}/samples/owl_sandbox/assets/m1"
 )
 # Keep discovered executable paths separate for each Visual Studio configuration.
-catch_discover_tests(OwlUnitTests DISCOVERY_MODE PRE_TEST)
+# Validation callbacks log errors without failing Catch2 assertions; CTest must reject them.
+catch_discover_tests(OwlUnitTests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES FAIL_REGULAR_EXPRESSION "[[]error[]] [[]VulkanValidation[]]"
+)

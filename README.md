@@ -20,7 +20,10 @@ selection, logical Device, queues, Swapchain, and a two-frame clear/draw/present
 Opt-in local integration tests exercise Dynamic Rendering, synchronization, resize, minimize,
 and restore, with optional presentation fences and a Vulkan 1.3 compatibility path. Sandbox provides
 Smoke, Clear, and indexed Triangle samples. Triangle uses sample-local precompiled SPIR-V and a
-native Dynamic Rendering graphics pipeline; full M1 visual/validation/capture acceptance is pending.
+native Dynamic Rendering graphics pipeline. The acquire-to-layout-transition synchronization
+issue is fixed: both configurations' GPU tests and a 12,124-frame Debug run pass synchronization
+validation. Earlier RenderDoc inspection passed; final manual visual checks remain.
+See [M1 acceptance](docs/learning/m1-vulkan-bootstrap.md) for verification scope and workflow.
 See [project status](PROJECT.md) for verification scope and the next task.
 
 ## Build, Test, and Run on Windows

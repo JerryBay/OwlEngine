@@ -98,6 +98,46 @@ Debug and RelWithDebInfo request validation when `VK_LAYER_KHRONOS_validation` i
 A missing layer produces a warning without failing the tests; such a pass is runtime evidence,
 not evidence of a validation-clean run.
 
+## Validation-Enabled Acceptance
+
+The optional [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) supplies
+`VK_LAYER_KHRONOS_validation`; the project's vcpkg Headers and Loader do not supply it.
+Keep CMake using the pinned vcpkg dependencies when adding SDK diagnostics tools.
+A normal SDK installation registers its layers. For an extracted/copy-only SDK, point
+`VK_LAYER_PATH` at its `Bin` directory in the test shell. Use a non-elevated shell for that
+override: the Loader ignores layer-path environment overrides in elevated processes.
+
+Explicitly enable synchronization validation for M1 acceptance:
+
+```powershell
+# For a copy-only SDK, first set VK_LAYER_PATH to that SDK's Bin directory.
+$env:VK_KHRONOS_VALIDATION_VALIDATE_SYNC = 'true'
+$env:VK_KHRONOS_VALIDATION_SYNCVAL_SUBMIT_TIME_VALIDATION = 'true'
+$env:OWL_RUN_VULKAN_BOOTSTRAP_TEST = '1'
+ctest --preset windows-vs2026-debug -R '^Vulkan .* locally$' -V *> build/validation-debug.log
+ctest --preset windows-vs2026-relwithdebinfo -R '^Vulkan .* locally$' -V *> build/validation-relwithdebinfo.log
+Remove-Item Env:OWL_RUN_VULKAN_BOOTSTRAP_TEST
+
+# Run the formal sample after the integration tests.
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle *> build/validation-triangle.log
+$LASTEXITCODE
+```
+
+Confirm `Device test validation enabled` and the Khronos layer startup messages in the logs.
+Inspect the complete logs for `[VulkanValidation]` errors, including initialization and shutdown;
+CTest marks a discovered unit/integration test as failed when it reports
+`[error] [VulkanValidation]`, even if all Catch2 assertions pass. Direct `OwlUnitTests` execution
+and Sandbox still only log these errors; their exit codes alone do not prove validation success.
+Check warnings individually, since third-party implicit layers can also produce loader warnings.
+The [official layer settings](https://vulkan.lunarg.com/doc/view/latest/windows/khronos_validation_layer.html)
+describe the synchronization options above.
+
+For the long run, leave the sample rendering for at least a few minutes, exercise the window
+checks below, then close normally. Require the final `presented` count to reach 10,000;
+elapsed time alone is not proof, especially while minimized. Record exit code, frame counts,
+GPU/driver, build configuration, layer version/settings, and validation messages. A successful
+RenderDoc capture is a separate check. See [M1 acceptance](../learning/m1-vulkan-bootstrap.md).
+
 ## Run the Visible Smoke Sample
 
 ```powershell

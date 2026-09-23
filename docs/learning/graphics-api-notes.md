@@ -75,8 +75,35 @@ Barrier 的阶段、访问范围和图像布局需要围绕真实的资源使用
 - Image Layout 描述图像在特定用途下的布局要求；布局转换需要与相关访问正确同步。
 - Acquire、Render、Present 是不同环节。渲染提交完成，不等于呈现系统已释放相关资源，更不等于屏幕已显示这一帧。
 
+`oldLayout = UNDEFINED` 允许丢弃旧像素内容，但不会取消与先前访问之间的同步要求；布局转换本身也需要排序。
+例如，Acquire Semaphore 等待在 `COLOR_ATTACHMENT_OUTPUT` 时，后续布局转换 Barrier 的源阶段也可设为
+`COLOR_ATTACHMENT_OUTPUT`，把“获取完成 → 布局转换 → 颜色附件写入”连成执行依赖链。
+只设置 Barrier 的目标阶段并不能保证转换发生在 Semaphore 等待之后；源阶段 `NONE` 也不等于“自动等完前面的工作”。
+这里等待的是先前访问结束，源访问掩码可以保持 `NONE`。参见
+[Khronos：交换链获取与呈现同步示例](https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples#swapchain-image-acquire-and-present)。
+
 窗口变化时，应根据哪些对象依赖尺寸、格式和呈现能力决定重建范围，而不是销毁整套渲染资源。
 仅尺寸变化、颜色格式变化、暂时没有可绘制区域，需要分别处理。
 
 继续深入：Fence、Semaphore、Barrier 各自覆盖的范围，以及渲染完成和呈现资源可复用之间的区别。
 参见 [Khronos：同步](https://docs.vulkan.org/guide/latest/synchronization.html)。
+
+## 7. GPU 捕获是怎样帮助验证的
+
+运行日志只能说明应用走到了某个调用点；GPU 捕获把一帧中的 API 事件、资源、Pipeline 状态和输出图像保存下来，
+可以检查实际录入的 Draw、绑定的 Shader、Render Target、Viewport 和资源读写关系。
+
+一次 RenderDoc 调试应分成两个阶段：先由 RenderDoc 注入目标程序并生成 `.rdc`，再打开捕获分析事件。
+因此“捕获失败”和“捕获后发现绘制错误”是两类不同问题：前者尚未获得 GPU 帧证据，不能据此判断 Vulkan 绘制逻辑错误。
+
+典型的单 Draw 检查顺序是：
+
+```text
+capture → open_capture → list_events / list_draws
+        → goto_event → get_pipeline_state / get_bindings
+        → get_shader / export_render_target
+```
+
+`vkCmdDrawIndexed` 出现在事件列表中，只能证明捕获到了绘制命令；还要确认它有颜色附件、正确的 Shader 和有效的索引范围。
+导出的 Render Target 或像素历史，才是对该 Draw 输出的独立检查。Validation Layer 日志则用于检查 API 使用是否合法，
+它与画面是否正确是互补证据。
