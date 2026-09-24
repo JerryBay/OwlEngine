@@ -12,6 +12,8 @@
 #include <owl/foundation/Log.h>
 #include <owl/platform/Window.h>
 
+#include <cstdio>
+#include <exception>
 #include <limits>
 #include <utility>
 
@@ -35,17 +37,132 @@ namespace owl::vulkan
         bool deviceLost = false;
         std::string failure;
 
-        ~Impl()
+        ~Impl() noexcept
         {
+            bool drained = false;
             try
             {
                 std::string error;
-                static_cast<void>(WaitIdle(error));
+                drained = WaitIdle(error);
             }
             catch (...)
             {
-                // Destruction cannot propagate diagnostic allocation/logging failures.
+                // The native final drain below does not allocate or emit C++ diagnostics.
             }
+            if (!drained && DrainForDestructionNoexcept() == DestructionDrain::Unresolved)
+            {
+                std::fputs("OwlEngine fatal: unresolved Vulkan work during renderer teardown\n",
+                           stderr);
+                std::terminate();
+            }
+        }
+
+        enum class DestructionDrain
+        {
+            Complete,
+            DeviceLost,
+            Unresolved,
+        };
+
+        DestructionDrain DrainForDestructionNoexcept() noexcept
+        {
+            if (!device.IsValid())
+                return triangle.DrainUploadForDestruction() == VK_SUCCESS
+                           ? DestructionDrain::Complete
+                           : DestructionDrain::Unresolved;
+            if (deviceLost)
+            {
+                triangle.MarkUploadDeviceLostForDestruction();
+                return DestructionDrain::DeviceLost;
+            }
+
+            const auto classify = [&](const VkResult result)
+            {
+                if (result == VK_ERROR_DEVICE_LOST)
+                {
+                    deviceLost = true;
+                    triangle.MarkUploadDeviceLostForDestruction();
+                    return DestructionDrain::DeviceLost;
+                }
+                return result == VK_SUCCESS ? DestructionDrain::Complete
+                                            : DestructionDrain::Unresolved;
+            };
+
+            bool unresolved = false;
+            if (const auto result = triangle.DrainUploadForDestruction(); result != VK_SUCCESS)
+            {
+                if (classify(result) == DestructionDrain::DeviceLost)
+                    return DestructionDrain::DeviceLost;
+                unresolved = true;
+            }
+
+            const auto drainFence = [&](const VkFence fence, bool& pending)
+            {
+                if (!pending)
+                    return DestructionDrain::Complete;
+                if (fence == VK_NULL_HANDLE)
+                    return DestructionDrain::Unresolved;
+                const auto result = vkWaitForFences(
+                    device.Get(), 1, &fence, VK_TRUE,
+                    std::numeric_limits<std::uint64_t>::max());
+                const auto status = classify(result);
+                if (status == DestructionDrain::Complete)
+                    pending = false;
+                return status;
+            };
+            for (auto& slot : frames.slots)
+            {
+                for (bool* pending : {&slot.submissionPending, &slot.acquisitionPending})
+                {
+                    const VkFence fence = pending == &slot.submissionPending ? slot.complete
+                                                                            : slot.acquired;
+                    const auto status = drainFence(fence, *pending);
+                    if (status == DestructionDrain::DeviceLost)
+                        return status;
+                    unresolved = unresolved || status == DestructionDrain::Unresolved;
+                }
+            }
+            for (auto& image : frames.images)
+            {
+                if (image.presentPending && !device.HasPresentFences())
+                {
+                    unresolved = true;
+                    continue;
+                }
+                const auto status = drainFence(image.released, image.presentPending);
+                if (status == DestructionDrain::DeviceLost)
+                    return status;
+                unresolved = unresolved || status == DestructionDrain::Unresolved;
+            }
+            if (!unresolved)
+                return DestructionDrain::Complete;
+
+            const auto idleStatus = classify(vkDeviceWaitIdle(device.Get()));
+            if (idleStatus != DestructionDrain::Complete)
+                return idleStatus;
+            // Device idle proves graphics submissions, including the startup copy and draw
+            // submissions. Acquire and present fences still need their own WSI completion proof.
+            triangle.MarkUploadCompleteAfterQueueIdleForDestruction();
+            for (auto& slot : frames.slots)
+            {
+                slot.submissionPending = false;
+                const auto status = drainFence(slot.acquired, slot.acquisitionPending);
+                if (status != DestructionDrain::Complete)
+                    return status;
+            }
+            for (auto& image : frames.images)
+            {
+                if (!device.HasPresentFences())
+                {
+                    // Existing compatibility contract: device idle is the best available proof.
+                    image.presentPending = false;
+                    continue;
+                }
+                const auto status = drainFence(image.released, image.presentPending);
+                if (status != DestructionDrain::Complete)
+                    return status;
+            }
+            return DestructionDrain::Complete;
         }
 
         bool Check(const VkResult result, const char* operation, std::string& error)
@@ -108,6 +225,15 @@ namespace owl::vulkan
             if (deviceLost)
             {
                 error = failure;
+                return false;
+            }
+            const auto uploadResult = triangle.WaitForUpload(error);
+            if (uploadResult != VK_SUCCESS)
+            {
+                failed = true;
+                deviceLost = deviceLost || uploadResult == VK_ERROR_DEVICE_LOST;
+                if (deviceLost)
+                    failure = error;
                 return false;
             }
             for (auto& slot : frames.slots)

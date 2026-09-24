@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanBuffer.h"
+#include "VulkanBufferUpload.h"
 
 #include <vulkan/vulkan.h>
 
@@ -35,12 +36,19 @@ namespace owl::vulkan
         [[nodiscard]] bool Initialize(const VulkanDevice& device, const TriangleShaderPaths& paths,
                                       std::string& error);
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
+        // Completes the startup geometry upload and installs the device-local destination.
+        // Calling this repeatedly is safe after successful completion.
+        [[nodiscard]] VkResult WaitForUpload(std::string& error);
+        [[nodiscard]] VkResult DrainUploadForDestruction() noexcept;
+        void MarkUploadCompleteAfterQueueIdleForDestruction() noexcept;
+        void MarkUploadDeviceLostForDestruction() noexcept;
         // Requires a successful SetColorFormat and an active matching Dynamic Rendering scope.
         void RecordDraw(VkCommandBuffer command, VkExtent2D extent) const noexcept;
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanBuffer geometry_;
+        std::optional<VulkanBufferUpload> upload_;
         VkPipelineLayout layout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;

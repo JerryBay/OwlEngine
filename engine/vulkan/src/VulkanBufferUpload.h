@@ -66,6 +66,10 @@ namespace owl::vulkan
         [[nodiscard]] VkResult SubmitAndWait(std::string& error);
         [[nodiscard]] VkResult Wait(std::string& error);
         [[nodiscard]] bool IsPending() const noexcept;
+        // Destructor support: waits and updates ownership without allocating diagnostics.
+        [[nodiscard]] VkResult DrainForDestruction() noexcept;
+        void MarkCompleteAfterQueueIdleForDestruction() noexcept;
+        void MarkDeviceLostForDestruction() noexcept;
         [[nodiscard]] VkMemoryPropertyFlags StagingMemoryProperties() const noexcept;
         [[nodiscard]] std::optional<VulkanBuffer> TakeDestination(std::string& error);
 
@@ -79,6 +83,7 @@ namespace owl::vulkan
         VkFence fence_ = VK_NULL_HANDLE;
         std::optional<VulkanBuffer> staging_;
         std::optional<VulkanBuffer> destination_;
+        VkMemoryPropertyFlags stagingMemoryProperties_ = 0;
         detail::BufferUploadState state_ = detail::BufferUploadState::NotSubmitted;
     };
 } // namespace owl::vulkan

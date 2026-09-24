@@ -129,21 +129,25 @@ namespace owl::vulkan
         fragmentShader_ = std::move(*fragment);
         device_ = device.Get();
 
-        const VulkanBufferDesc desc{
-            .size = sizeof(Vertices) + sizeof(Indices),
-            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-            .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        };
-        auto geometry = VulkanBuffer::Create(device, desc, error);
-        if (!geometry)
+        std::array<std::byte, sizeof(Vertices) + sizeof(Indices)> payload{};
+        std::memcpy(payload.data(), Vertices.data(), sizeof(Vertices));
+        std::memcpy(payload.data() + IndexOffset, Indices.data(), sizeof(Indices));
+        constexpr VkPipelineStageFlags2 geometryStages =
+            VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
+        constexpr VkAccessFlags2 geometryAccess =
+            VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
+        auto upload = VulkanBufferUpload::Create(
+            device, std::as_bytes(std::span{payload}),
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, geometryStages,
+            geometryAccess, error);
+        if (!upload)
             return false;
-        const auto vertices = std::as_bytes(std::span{Vertices});
-        const auto indices = std::as_bytes(std::span{Indices});
-        if (!geometry->Write(0, vertices, error) || !geometry->Write(IndexOffset, indices, error))
+        upload_ = std::move(*upload);
+        if (upload_->SubmitAndWait(error) != VK_SUCCESS)
             return false;
-        geometry_ = std::move(*geometry);
-        // Immutable thereafter. Queue submission makes preceding host writes available to the GPU.
+        if (WaitForUpload(error) != VK_SUCCESS)
+            return false;
+        // Immutable thereafter. The upload barrier makes the device-local bytes visible to draws.
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -151,11 +155,62 @@ namespace owl::vulkan
                    "vkCreatePipelineLayout(triangle)", error))
             return false;
         layout_ = layout;
-        owl::foundation::LogMessage(
-            owl::foundation::LogLevel::Info, "Vulkan",
-            "Triangle geometry uploaded (3 vertices, 3 uint16 indices)");
         error.clear();
         return true;
+    }
+
+    VkResult VulkanTrianglePipeline::WaitForUpload(std::string& error)
+    {
+        if (!upload_)
+        {
+            error.clear();
+            return VK_SUCCESS;
+        }
+        const auto result = upload_->Wait(error);
+        if (result == VK_NOT_READY && !upload_->IsPending())
+        {
+            // A failed submit never owns in-flight work. Release its prepared resources while
+            // preserving the original initialization error for the caller.
+            upload_.reset();
+            return VK_SUCCESS;
+        }
+        if (result != VK_SUCCESS)
+            return result;
+
+        const auto stagingFlags = upload_->StagingMemoryProperties();
+        auto destination = upload_->TakeDestination(error);
+        if (!destination)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        const auto logicalSize = destination->Size();
+        const auto allocationSize = destination->AllocationSize();
+        const auto destinationFlags = destination->MemoryProperties();
+        geometry_ = std::move(*destination);
+        upload_.reset();
+        owl::foundation::LogMessage(
+            owl::foundation::LogLevel::Info, "Vulkan",
+            "Triangle geometry staging upload complete (bytes=" + std::to_string(logicalSize) +
+                ", allocation=" + std::to_string(allocationSize) +
+                ", stagingFlags=" + std::to_string(stagingFlags) +
+                ", destinationFlags=" + std::to_string(destinationFlags) + ")");
+        error.clear();
+        return VK_SUCCESS;
+    }
+
+    VkResult VulkanTrianglePipeline::DrainUploadForDestruction() noexcept
+    {
+        return upload_ ? upload_->DrainForDestruction() : VK_SUCCESS;
+    }
+
+    void VulkanTrianglePipeline::MarkUploadDeviceLostForDestruction() noexcept
+    {
+        if (upload_)
+            upload_->MarkDeviceLostForDestruction();
+    }
+
+    void VulkanTrianglePipeline::MarkUploadCompleteAfterQueueIdleForDestruction() noexcept
+    {
+        if (upload_)
+            upload_->MarkCompleteAfterQueueIdleForDestruction();
     }
 
     bool VulkanTrianglePipeline::SetColorFormat(const VkFormat format, std::string& error)

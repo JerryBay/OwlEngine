@@ -91,6 +91,7 @@ namespace owl::vulkan
           fence_(std::exchange(other.fence_, VK_NULL_HANDLE)),
           staging_(std::move(other.staging_)),
           destination_(std::move(other.destination_)),
+          stagingMemoryProperties_(std::exchange(other.stagingMemoryProperties_, 0)),
           state_(std::exchange(other.state_, detail::BufferUploadState::NotSubmitted))
     {
     }
@@ -106,6 +107,7 @@ namespace owl::vulkan
             fence_ = std::exchange(other.fence_, VK_NULL_HANDLE);
             staging_ = std::move(other.staging_);
             destination_ = std::move(other.destination_);
+            stagingMemoryProperties_ = std::exchange(other.stagingMemoryProperties_, 0);
             state_ = std::exchange(other.state_, detail::BufferUploadState::NotSubmitted);
         }
         return *this;
@@ -160,6 +162,7 @@ namespace owl::vulkan
         result.staging_ = VulkanBuffer::Create(device, stagingDesc, error);
         if (!result.staging_)
             return std::nullopt;
+        result.stagingMemoryProperties_ = result.staging_->MemoryProperties();
 
         const VulkanBufferDesc destinationDesc{
             .size = bytes.size(),
@@ -304,9 +307,44 @@ namespace owl::vulkan
         return detail::IsBufferUploadPending(state_);
     }
 
+    VkResult VulkanBufferUpload::DrainForDestruction() noexcept
+    {
+        if (state_ == detail::BufferUploadState::DeviceLost)
+            return VK_ERROR_DEVICE_LOST;
+        if (state_ != detail::BufferUploadState::Pending)
+            return VK_SUCCESS;
+        if (device_ == nullptr || !device_->IsValid() || fence_ == VK_NULL_HANDLE)
+            return VK_ERROR_UNKNOWN;
+
+        const VkResult result = vkWaitForFences(
+            device_->Get(), 1, &fence_, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
+        state_ = detail::StateAfterWait(state_, result);
+        if (result == VK_SUCCESS)
+        {
+            staging_.reset();
+            ReleaseTransient();
+        }
+        return result;
+    }
+
+    void VulkanBufferUpload::MarkDeviceLostForDestruction() noexcept
+    {
+        if (state_ == detail::BufferUploadState::Pending)
+            state_ = detail::BufferUploadState::DeviceLost;
+    }
+
+    void VulkanBufferUpload::MarkCompleteAfterQueueIdleForDestruction() noexcept
+    {
+        if (state_ != detail::BufferUploadState::Pending)
+            return;
+        state_ = detail::BufferUploadState::Completed;
+        staging_.reset();
+        ReleaseTransient();
+    }
+
     VkMemoryPropertyFlags VulkanBufferUpload::StagingMemoryProperties() const noexcept
     {
-        return staging_ ? staging_->MemoryProperties() : 0;
+        return stagingMemoryProperties_;
     }
 
     std::optional<VulkanBuffer> VulkanBufferUpload::TakeDestination(std::string& error)
@@ -316,7 +354,7 @@ namespace owl::vulkan
             error = "Buffer upload destination is not ready";
             return std::nullopt;
         }
-        auto result = std::move(destination_);
+        auto result = std::exchange(destination_, std::nullopt);
         error.clear();
         return result;
     }
@@ -347,6 +385,7 @@ namespace owl::vulkan
         staging_.reset();
         destination_.reset();
         device_ = nullptr;
+        stagingMemoryProperties_ = 0;
         state_ = detail::BufferUploadState::NotSubmitted;
     }
 } // namespace owl::vulkan

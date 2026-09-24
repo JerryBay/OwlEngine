@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL_stdinc.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -136,7 +137,7 @@ namespace
 
     bool Readback(const owl::vulkan::VulkanDevice& device,
                   const owl::vulkan::VulkanBuffer& source, std::span<std::byte> output,
-                  std::string& error)
+                  VkMemoryPropertyFlags& memoryProperties, std::string& error)
     {
         const owl::vulkan::VulkanBufferDesc desc{
             .size = output.size(),
@@ -147,6 +148,10 @@ namespace
         auto readback = owl::vulkan::VulkanBuffer::Create(device, desc, error);
         if (!readback)
             return false;
+        memoryProperties = readback->MemoryProperties();
+        owl::foundation::LogMessage(
+            owl::foundation::LogLevel::Info, "Vulkan",
+            "Buffer readback memory flags=" + std::to_string(memoryProperties));
         const auto families = device.QueueFamilies();
         if (!families.graphicsFamily)
         {
@@ -321,6 +326,49 @@ TEST_CASE("Vulkan buffer upload rejects destination transfer before completion",
     CHECK_FALSE(error.empty());
 }
 
+TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][integration]")
+{
+    if (!IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local GPU buffer test");
+
+    std::string error;
+    auto context = CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context.has_value());
+    REQUIRE(context->device.has_value());
+    const auto payload = Pattern(37);
+    const owl::vulkan::VulkanBufferDesc desc{
+        .size = payload.size(),
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    };
+    auto source = owl::vulkan::VulkanBuffer::Create(*context->device, desc, error);
+    INFO(error);
+    REQUIRE(source.has_value());
+    REQUIRE(source->Write(0, payload, error));
+    std::vector<std::byte> actual(payload.size());
+    REQUIRE(source->Read(0, actual, error));
+    CHECK(actual == payload);
+
+    owl::vulkan::VulkanBuffer moved{std::move(*source)};
+    CHECK_FALSE(source->IsValid());
+    REQUIRE(moved.IsValid());
+    std::fill(actual.begin(), actual.end(), std::byte{});
+    REQUIRE(moved.Read(0, actual, error));
+    CHECK(actual == payload);
+
+    auto replacement = owl::vulkan::VulkanBuffer::Create(*context->device, desc, error);
+    INFO(error);
+    REQUIRE(replacement.has_value());
+    *replacement = std::move(moved);
+    CHECK_FALSE(moved.IsValid());
+    REQUIRE(replacement->IsValid());
+    std::fill(actual.begin(), actual.end(), std::byte{});
+    REQUIRE(replacement->Read(0, actual, error));
+    CHECK(actual == payload);
+}
+
 TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-upload][integration]")
 {
     if (!IsGpuTestEnabled())
@@ -365,8 +413,11 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
         auto destination = upload->TakeDestination(error);
         INFO(error);
         REQUIRE(destination.has_value());
+        CHECK_FALSE(upload->TakeDestination(error).has_value());
+        CHECK_FALSE(error.empty());
         std::vector<std::byte> actual(size);
-        CHECK(Readback(*context->device, *destination, actual, error));
+        VkMemoryPropertyFlags readbackMemoryProperties = 0;
+        CHECK(Readback(*context->device, *destination, actual, readbackMemoryProperties, error));
         INFO(error);
         CHECK(actual == payload);
         if (destination)
@@ -377,8 +428,9 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
                     std::to_string(destination->MemoryProperties()));
             INFO("destination memory flags: " +
                  std::to_string(destination->MemoryProperties()));
+            INFO("readback memory flags: " + std::to_string(readbackMemoryProperties));
             INFO("non-coherent readback: " +
-                 std::string{(destination->MemoryProperties() & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                 std::string{(readbackMemoryProperties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
                                  ? "false"
                                  : "true"});
         }
