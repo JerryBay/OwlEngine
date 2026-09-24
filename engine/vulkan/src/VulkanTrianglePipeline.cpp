@@ -8,29 +8,11 @@
 #include <cstddef>
 #include <cstring>
 #include <fstream>
+#include <span>
 #include <utility>
 
 namespace owl::vulkan::detail
 {
-    std::optional<std::uint32_t>
-    SelectTriangleMemoryType(const VkPhysicalDeviceMemoryProperties& properties,
-                             const std::uint32_t memoryTypeBits) noexcept
-    {
-        std::optional<std::uint32_t> fallback;
-        for (std::uint32_t index = 0; index < properties.memoryTypeCount && index < 32; ++index)
-        {
-            const auto flags = properties.memoryTypes[index].propertyFlags;
-            if ((memoryTypeBits & (1U << index)) == 0 ||
-                (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)
-                continue;
-            if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0)
-                return index;
-            if (!fallback)
-                fallback = index;
-        }
-        return fallback;
-    }
-
     std::optional<std::vector<std::uint32_t>> ReadTriangleSpirv(const std::filesystem::path& path,
                                                                 std::string& error)
     {
@@ -127,8 +109,6 @@ namespace owl::vulkan
             return;
         vkDestroyPipeline(device_, pipeline_, nullptr);
         vkDestroyPipelineLayout(device_, layout_, nullptr);
-        vkDestroyBuffer(device_, geometry_, nullptr);
-        vkFreeMemory(device_, memory_, nullptr);
     }
 
     bool VulkanTrianglePipeline::Initialize(const VulkanDevice& device,
@@ -149,65 +129,20 @@ namespace owl::vulkan
         fragmentShader_ = std::move(*fragment);
         device_ = device.Get();
 
-        const VkBufferCreateInfo bufferInfo{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        const VulkanBufferDesc desc{
             .size = sizeof(Vertices) + sizeof(Indices),
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         };
-        VkBuffer buffer = VK_NULL_HANDLE;
-        if (!Check(vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer),
-                   "vkCreateBuffer(triangle)", error))
+        auto geometry = VulkanBuffer::Create(device, desc, error);
+        if (!geometry)
             return false;
-        geometry_ = buffer;
-        VkMemoryRequirements requirements{};
-        vkGetBufferMemoryRequirements(device_, geometry_, &requirements);
-        VkPhysicalDeviceMemoryProperties properties{};
-        vkGetPhysicalDeviceMemoryProperties(device.PhysicalDevice(), &properties);
-        const auto memoryType =
-            detail::SelectTriangleMemoryType(properties, requirements.memoryTypeBits);
-        if (!memoryType)
-        {
-            error = "Triangle buffer has no compatible host-visible memory type";
+        const auto vertices = std::as_bytes(std::span{Vertices});
+        const auto indices = std::as_bytes(std::span{Indices});
+        if (!geometry->Write(0, vertices, error) || !geometry->Write(IndexOffset, indices, error))
             return false;
-        }
-        const VkMemoryAllocateInfo allocate{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .allocationSize = requirements.size,
-            .memoryTypeIndex = *memoryType,
-        };
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        if (!Check(vkAllocateMemory(device_, &allocate, nullptr, &memory),
-                   "vkAllocateMemory(triangle)", error))
-            return false;
-        memory_ = memory;
-        if (!Check(vkBindBufferMemory(device_, geometry_, memory_, 0),
-                   "vkBindBufferMemory(triangle)", error))
-            return false;
-        void* mapped = nullptr;
-        if (!Check(vkMapMemory(device_, memory_, 0, VK_WHOLE_SIZE, 0, &mapped),
-                   "vkMapMemory(triangle)", error))
-            return false;
-        std::memcpy(mapped, Vertices.data(), sizeof(Vertices));
-        std::memcpy(static_cast<std::byte*>(mapped) + IndexOffset, Indices.data(), sizeof(Indices));
-        const bool coherent = (properties.memoryTypes[*memoryType].propertyFlags &
-                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-        bool flushed = true;
-        if (!coherent)
-        {
-            // Map/flush the entire allocation: offset 0 and WHOLE_SIZE satisfy atom alignment.
-            const VkMappedMemoryRange range{
-                .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
-                .memory = memory_,
-                .offset = 0,
-                .size = VK_WHOLE_SIZE,
-            };
-            flushed = Check(vkFlushMappedMemoryRanges(device_, 1, &range),
-                            "vkFlushMappedMemoryRanges(triangle)", error);
-        }
-        vkUnmapMemory(device_, memory_);
-        if (!flushed)
-            return false;
+        geometry_ = std::move(*geometry);
         // Immutable thereafter. Queue submission makes preceding host writes available to the GPU.
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -218,8 +153,7 @@ namespace owl::vulkan
         layout_ = layout;
         owl::foundation::LogMessage(
             owl::foundation::LogLevel::Info, "Vulkan",
-            "Triangle geometry uploaded (3 vertices, 3 uint16 indices, memoryType=" +
-                std::to_string(*memoryType) + ", coherent=" + (coherent ? "true" : "false") + ")");
+            "Triangle geometry uploaded (3 vertices, 3 uint16 indices)");
         error.clear();
         return true;
     }
@@ -345,8 +279,9 @@ namespace owl::vulkan
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
-        vkCmdBindVertexBuffers(command, 0, 1, &geometry_, &vertexOffset);
-        vkCmdBindIndexBuffer(command, geometry_, IndexOffset, VK_INDEX_TYPE_UINT16);
+        const VkBuffer buffer = geometry_.Get();
+        vkCmdBindVertexBuffers(command, 0, 1, &buffer, &vertexOffset);
+        vkCmdBindIndexBuffer(command, buffer, IndexOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command, static_cast<std::uint32_t>(Indices.size()), 1, 0, 0, 0);
     }
 } // namespace owl::vulkan

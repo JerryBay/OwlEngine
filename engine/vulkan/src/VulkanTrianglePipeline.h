@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VulkanBuffer.h"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -10,11 +12,6 @@
 
 namespace owl::vulkan::detail
 {
-    // Filter by the buffer's memoryTypeBits before preferring coherent host-visible memory.
-    [[nodiscard]] std::optional<std::uint32_t>
-    SelectTriangleMemoryType(const VkPhysicalDeviceMemoryProperties& properties,
-                             std::uint32_t memoryTypeBits) noexcept;
-
     // Checks the binary envelope, not full SPIR-V semantics; use spirv-val for asset validation.
     [[nodiscard]] std::optional<std::vector<std::uint32_t>>
     ReadTriangleSpirv(const std::filesystem::path& path, std::string& error);
@@ -43,8 +40,7 @@ namespace owl::vulkan
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
-        VkBuffer geometry_ = VK_NULL_HANDLE;
-        VkDeviceMemory memory_ = VK_NULL_HANDLE;
+        VulkanBuffer geometry_;
         VkPipelineLayout layout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;
