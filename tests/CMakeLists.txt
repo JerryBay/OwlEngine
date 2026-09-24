@@ -16,6 +16,7 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/DeviceSelectionTests.cpp
     vulkan/DeviceTests.cpp
     vulkan/BufferTests.cpp
+    vulkan/BufferUploadTests.cpp
     vulkan/FrameTests.cpp
     vulkan/SwapchainTests.cpp
     vulkan/TrianglePipelineTests.cpp
