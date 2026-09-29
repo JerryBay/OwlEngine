@@ -28,10 +28,11 @@ See [M1 acceptance](docs/learning/m1-vulkan-bootstrap.md) for verification scope
 
 M2 is in implementation. The native M2A exercise established buffer ownership, staging uploads,
 exact GPU readback, and device-local triangle geometry. M2B-1 now uses pinned VMA 3.4.0 for
-allocation, with explicit host-access intent and unchanged upload synchronization. Both local
-VS2026 configurations pass 73/73 tests with synchronization validation. Texture resources,
-sampling and mip generation are next. See the [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
-[VMA migration plan](docs/superpowers/plans/2026-09-29-owlengine-m2b-vma.md), and
+allocation, with explicit host-access intent and unchanged upload synchronization. M2B-2's first
+step adds private Image/ImageView/Sampler owners and resource lifecycle checks. Both local VS2026
+configurations pass 84/84 tests with synchronization validation. Texture pixel upload, sampling
+and mip generation remain next. See the [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
+[image resource plan](docs/superpowers/plans/2026-09-29-owlengine-m2b-image-resources.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
 
 ## Build, Test, and Run on Windows

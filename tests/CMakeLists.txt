@@ -19,6 +19,10 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/BufferTests.cpp
     vulkan/BufferUploadTests.cpp
     vulkan/FrameTests.cpp
+    vulkan/ImageTests.cpp
+    vulkan/ImageResourceTests.cpp
+    vulkan/GpuTestContext.cpp
+    vulkan/GpuTestContext.h
     vulkan/SwapchainTests.cpp
     vulkan/TrianglePipelineTests.cpp
     vulkan/VulkanBootstrapTests.cpp

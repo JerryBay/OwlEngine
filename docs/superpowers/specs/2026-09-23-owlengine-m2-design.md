@@ -1,11 +1,12 @@
 # OwlEngine M2 GPU Resources, Memory, and Uploads Design
 
-- Status: M2A accepted locally; M2B-1 VMA migration implemented and locally verified (2026-09-29).
+- Status: M2A and M2B-1 accepted locally; M2B-2 resource ownership implemented (2026-09-29).
 - Date: 2026-09-23
 - Baseline: M1 accepted locally; native M2A buffer/upload/triangle implementation is in place.
 - Roadmap: [M2](2026-08-17-owlengine-roadmap-design.md#m2-gpu-resources-memory-and-uploads)
 - Completed native exercise: [M2A buffers and staging](../plans/2026-09-23-owlengine-m2a-buffer-upload.md)
-- Immediate plan: [M2B-1 VMA migration](../plans/2026-09-29-owlengine-m2b-vma.md)
+- Completed allocator slice: [M2B-1 VMA migration](../plans/2026-09-29-owlengine-m2b-vma.md)
+- Active texture slice: [M2B-2 image resource ownership](../plans/2026-09-29-owlengine-m2b-image-resources.md)
 
 ## 1. Outcome and Learning Goals
 
@@ -191,6 +192,12 @@ image; the image must outlive its views and submitted uses. Do not treat swapcha
 owned allocations. Use an optimal-tiling sampled color image, explicit subresource transitions,
 and a bounded procedural checkerboard with an indexed quad. No file importer, camera, or depth
 system is needed to prove texture ownership and sampling.
+
+The first texture step now provides these three move-only owners, with RGBA8 UNORM/SRGB,
+single-layer/single-sample 2D images, queried format limits, bounded mip views and basic normalized
+samplers. The [resource plan](../plans/2026-09-29-owlengine-m2b-image-resources.md) defines ownership
+and accepted inputs. Resource creation leaves contents undefined; upload/layout transitions,
+descriptors and the checkerboard draw are the next steps. Allocated mip levels are not generated mips.
 
 Generate mip levels with blits when the selected format supports the required blit and filtering
 features. Query those capabilities. Provide a CPU-generated mip upload fallback with defined

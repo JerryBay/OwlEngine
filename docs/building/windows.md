@@ -186,9 +186,15 @@ selected staging/destination memory flags; resizing does not upload the geometry
 
 For resource acceptance, enable the process-local validation settings above, set
 `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1`, and run both full CTest presets. The full run includes VMA
-mapping isolation/host intent/moves/allocation release, exact upload/readback patterns, and Clear/Triangle lifecycle tests; the
-older `^Vulkan .* locally$` filter does not select every buffer-upload case. Check actual Khronos
+mapping isolation/host intent/moves/allocation release, exact buffer upload/readback, Image/View/Sampler
+creation/lifetime, and Clear/Triangle lifecycle tests. The older `^Vulkan .* locally$` filter misses
+resource cases. Check actual Khronos
 layer activation and the full logs. A run reporting an unavailable layer is only runtime evidence.
+
+For the focused image-resource slice, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler)'`
+with the same GPU opt-in and validation environment; replace `debug` with `relwithdebinfo` for the other
+configuration. These cases create resources and check lifetimes without uploading or sampling pixels.
+They do not provide a new visual sample. A multi-mip allocation alone does not prove generated mip contents.
 
 ```powershell
 ./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle

@@ -13,11 +13,12 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2A accepted, M2B-1 VMA allocation migration implemented.
+- Current phase: M2 GPU resources; M2B-2 first step adds Image/View/Sampler ownership after VMA.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
-  synchronization validation. Textures, mip generation, per-frame uploads and retirement remain next.
+  synchronization validation. Private image/view/sampler resources can now be created and released;
+  texture pixels, layout transitions, sampling draws, mip generation and runtime retirement remain next.
 
 ## Implemented Baseline
 
@@ -55,7 +56,18 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - M2A private `VulkanBufferUpload`: one graphics-queue copy, explicit consumer barrier and fence,
     retained pending ownership, and destination transfer after completion. Triangle uploads 66 bytes
     once; vertex/index bindings remain at offsets 0/60 and geometry survives extent-only recreation.
+  - M2B-2 private move-only `VulkanImage`, `VulkanImageView`, `VulkanSampler`: VMA-backed
+    optimal 2D RGBA8 UNORM/SRGB images, queried format/dimension/mip limits, bounded same-format
+    color views, and basic normalized sampling rules. Only successful creation outputs become owned.
+    Views borrow native image/device handles; callers finish GPU use and release views before images.
+    Buffer and image tests share a test-only GpuContext; unsafe memberwise move assignment is disabled.
 - Verified:
+  - 2026-09-29, M2B-2 resource ownership on VS2026 Debug/RelWithDebInfo: both builds and full
+    opt-in CTest presets passed (84/84 each, no skips); Khronos synchronization/submit-time
+    validation was active with zero errors/warnings. Covered RGBA8 UNORM/SRGB, one/five mip
+    allocations, multiple views, owner moves/replacement, invalid requests, and allocation counts/bytes
+    returning to baseline. Review corrected failure-output ownership before the final run.
+    This validates creation/lifetime only; no texture pixels, sampling draw or driver OOM injection.
   - 2026-09-29, M2B-1 on VS2026 Debug/RelWithDebInfo: both builds passed; full opt-in CTest
     passed 73/73 per configuration without skips, with Khronos synchronization/submit-time
     validation enabled and zero validation errors/warnings. Eight live host allocations shared
@@ -155,7 +167,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A and M2B-1 allocation slice implemented; textures through M2D remain | Both configurations pass 73/73 with synchronization validation; VMA isolation/release and exact readback pass; RenderDoc evidence remains from M2A | Textured indexed mesh, generated mips, safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A, M2B-1 and M2B-2 resource owners implemented; texture pixels through M2D remain | Both configurations pass 84/84 with synchronization validation; resource lifetimes and buffer readback pass; RenderDoc evidence remains from M2A | Textured indexed mesh, generated mips, safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -206,6 +218,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Active milestone design: `docs/superpowers/specs/2026-09-23-owlengine-m2-design.md`
 - First M2 implementation plan: `docs/superpowers/plans/2026-09-23-owlengine-m2a-buffer-upload.md`
 - Current allocation slice: `docs/superpowers/plans/2026-09-29-owlengine-m2b-vma.md`
+- Current texture resource slice: `docs/superpowers/plans/2026-09-29-owlengine-m2b-image-resources.md`
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -217,6 +230,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `tests/vulkan/SwapchainTests.cpp`
 - Allocator/buffer/upload ownership: `engine/vulkan/src/VulkanAllocator.h`, `engine/vulkan/src/VulkanBuffer.h`,
   `engine/vulkan/src/VulkanBufferUpload.h`, and `tests/vulkan/BufferUploadTests.cpp`.
+- Image/view/sampler ownership: `engine/vulkan/src/VulkanImage.h`, `VulkanImageView.h`,
+  `VulkanSampler.h`; policies and lifecycle cases in `tests/vulkan/ImageTests.cpp` and
+  `tests/vulkan/ImageResourceTests.cpp`.
 - Frame lifecycle and tests: `engine/vulkan/include/owl/vulkan/VulkanTriangle.h`,
   `engine/vulkan/src/VulkanTriangle.cpp`, `engine/vulkan/src/VulkanFrame.h`, and
   `tests/vulkan/FrameTests.cpp`
@@ -237,12 +253,13 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `build/diagnostics/m2a-20260924/` (local, ignored). Validation uses the existing copy-only SDK;
   RenderDoc uses process-local `VK_IMPLICIT_LAYER_PATH`, with system registration unchanged.
 - M2B-1 local validation logs and scripts: `build/diagnostics/m2b-vma-20260929/` (ignored).
+- M2B-2 resource validation logs and scripts: `build/diagnostics/m2b-images-20260929/` (ignored).
 
 ## Next Work
 
-- Next checkpoint: design the M2B texture slice against the VMA-backed buffer/upload path:
-  image/view/sampler ownership, texture upload, minimal descriptor binding and mip generation.
-  Start from a procedural checkerboard indexed quad; share frame plumbing and preserve explicit synchronization.
+- Next checkpoint: upload bounded procedural checkerboard pixels through staging into the new
+  Image, track explicit layout transitions, and compare copied-back bytes. Then add minimal
+  descriptor binding and the indexed-quad sample, followed by mip generation. Share frame plumbing.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
   per-frame uploads, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

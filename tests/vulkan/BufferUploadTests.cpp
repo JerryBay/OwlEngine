@@ -1,17 +1,12 @@
 #include "VulkanBufferUpload.h"
+#include "GpuTestContext.h"
 
 #include "VulkanAllocator.h"
 #include "VulkanDevice.h"
-#include "VulkanDeviceSelection.h"
-#include "VulkanInstance.h"
-#include "VulkanSurface.h"
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <owl/platform/Platform.h>
 #include <owl/foundation/Log.h>
-
-#include <SDL3/SDL_stdinc.h>
 
 #include <algorithm>
 #include <array>
@@ -22,7 +17,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -34,72 +28,8 @@ namespace
     constexpr VkPipelineStageFlags2 CopyStage = VK_PIPELINE_STAGE_2_COPY_BIT;
     constexpr VkAccessFlags2 CopyRead = VK_ACCESS_2_TRANSFER_READ_BIT;
 
-    struct GpuContext
-    {
-        std::optional<owl::platform::Platform> platform;
-        std::optional<owl::platform::Window> window;
-        std::optional<owl::vulkan::VulkanInstance> instance;
-        std::optional<owl::vulkan::VulkanSurface> surface;
-        std::optional<owl::vulkan::VulkanDeviceSelection> selection;
-        std::optional<owl::vulkan::VulkanDevice> device;
-        std::optional<owl::vulkan::VulkanAllocator> allocator;
-
-        GpuContext() = default;
-        GpuContext(const GpuContext&) = delete;
-        GpuContext& operator=(const GpuContext&) = delete;
-        GpuContext(GpuContext&&) noexcept = default;
-        GpuContext& operator=(GpuContext&&) noexcept = default;
-
-        ~GpuContext()
-        {
-            if (device && device->IsValid())
-                static_cast<void>(vkDeviceWaitIdle(device->Get()));
-        }
-    };
-
-    std::optional<GpuContext> CreateGpuContext(std::string& error)
-    {
-        GpuContext result;
-        result.platform = owl::platform::Platform::Create(error);
-        if (!result.platform)
-            return std::nullopt;
-        const owl::platform::WindowDesc windowDesc{
-            .title = "OwlEngine - Vulkan Buffer Upload Test",
-            .width = 320,
-            .height = 180,
-            .resizable = false,
-            .surfaceApi = owl::platform::WindowSurfaceApi::Vulkan,
-        };
-        result.window = result.platform->CreateWindow(windowDesc, error);
-        if (!result.window)
-            return std::nullopt;
-        result.instance = owl::vulkan::VulkanInstance::Create(error);
-        if (!result.instance)
-            return std::nullopt;
-        result.surface = owl::vulkan::VulkanSurface::Create(*result.instance, *result.window, error);
-        if (!result.surface)
-            return std::nullopt;
-        result.selection = owl::vulkan::VulkanDeviceSelection::Select(
-            result.instance->Get(), result.surface->Get(), error);
-        if (!result.selection)
-            return std::nullopt;
-        result.device = owl::vulkan::VulkanDevice::Create(
-            *result.selection, error, result.instance->PresentationSupport());
-        if (!result.device)
-            return std::nullopt;
-        result.allocator = owl::vulkan::VulkanAllocator::Create(
-            result.instance->Get(), *result.device, error);
-        if (!result.allocator)
-            return std::nullopt;
-        error.clear();
-        return std::optional<GpuContext>{std::move(result)};
-    }
-
-    bool IsGpuTestEnabled()
-    {
-        const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
-        return enabled != nullptr && std::string_view{enabled} == "1";
-    }
+    using owl::tests::CreateGpuContext;
+    using owl::tests::IsGpuTestEnabled;
 
     std::vector<std::byte> Pattern(const std::size_t size)
     {

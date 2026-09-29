@@ -71,6 +71,24 @@ GPU 仍在读取的范围；启动时阻塞上传与运行时多帧上传也需�
 继续深入：部分非 coherent 范围的对齐、批量上传与完成后回收，以及独立显卡和统一内存的性能取舍。
 参见 [Khronos：内存分配](https://docs.vulkan.org/guide/latest/memory_allocation.html)。
 
+### Image、ImageView 与 Sampler
+
+Image 描述图像的格式、尺寸、mip 层数和用途，绑定的内存提供存储。ImageView 指定对哪些图像
+子资源进行何种解释，例如某一段 mip 层；它引用 Image，不复制像素。Sampler 保存过滤、寻址和
+LOD 规则，可以用于多个兼容图像，不拥有 Image 或 ImageView。资源组合交给 Shader 的绑定是另一步。
+
+创建多层 mip 的 Image 只准备了存储；像素上传、mip 生成和采样前的布局转换仍需完成。
+`initialLayout = UNDEFINED` 不能理解为像素已经清零，Sampler 创建成功也不能证明目标格式支持线性过滤。
+普通 optimal-tiling Image 的实际存储大小和布局由实现决定，不能按 `width × height × 像素字节数`
+直接计算其内存绑定要求或把它当作连续 CPU 像素数组。
+
+让 View 在 Image 之前销毁、Image 在分配器和 Device 之前销毁，可以建立清楚的所有权边界；
+这些 CPU 对象的销毁顺序仍需要以 GPU 已完成相关使用为前提。移动 C++ owner 可以保留原生句柄，
+但覆盖一个已有资源的 owner 会释放旧资源，必须满足旧资源的生命周期要求。
+参见 [Image 创建规则](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageCreateInfo.html)、
+[ImageView](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewCreateInfo.html) 和
+[Sampler](https://docs.vulkan.org/refpages/latest/refpages/source/VkSamplerCreateInfo.html)。
+
 ## 4. Shader、Pipeline 与 Pipeline Layout
 
 Shader 描述可编程阶段的计算；Graphics Pipeline 把 Shader 与顶点输入、图元装配、光栅化、颜色输出等状态组合起来。
