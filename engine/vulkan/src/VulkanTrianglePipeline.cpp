@@ -112,6 +112,7 @@ namespace owl::vulkan
     }
 
     bool VulkanTrianglePipeline::Initialize(const VulkanDevice& device,
+                                            const VulkanAllocator& allocator,
                                             const TriangleShaderPaths& paths, std::string& error)
     {
         if (!device.IsValid() || device_ != VK_NULL_HANDLE)
@@ -137,7 +138,7 @@ namespace owl::vulkan
         constexpr VkAccessFlags2 geometryAccess =
             VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
         auto upload = VulkanBufferUpload::Create(
-            device, std::as_bytes(std::span{payload}),
+            device, allocator, std::as_bytes(std::span{payload}),
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, geometryStages,
             geometryAccess, error);
         if (!upload)
@@ -189,7 +190,7 @@ namespace owl::vulkan
         owl::foundation::LogMessage(
             owl::foundation::LogLevel::Info, "Vulkan",
             "Triangle geometry staging upload complete (bytes=" + std::to_string(logicalSize) +
-                ", allocation=" + std::to_string(allocationSize) +
+                ", vmaAllocation=" + std::to_string(allocationSize) +
                 ", stagingFlags=" + std::to_string(stagingFlags) +
                 ", destinationFlags=" + std::to_string(destinationFlags) + ")");
         error.clear();

@@ -13,11 +13,11 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M1, native Vulkan 1.3 bootstrap and frame lifecycle.
-- Current implementation boundary: M1 Tasks 1-8 are implemented through indexed-triangle presentation.
-  Local integration tests reach the full native Vulkan frame lifecycle and window-driven
-  recreation. Sandbox provides Smoke, Clear, and Triangle samples. Visual, validation-enabled, and
-  RenderDoc acceptance remain separate checks. This is not full M1 acceptance.
+- Current phase: M2 GPU resources; M2A accepted, M2B-1 VMA allocation migration implemented.
+- Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
+  workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
+  exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
+  synchronization validation. Textures, mip generation, per-frame uploads and retirement remain next.
 
 ## Implemented Baseline
 
@@ -42,12 +42,50 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - `OwlSandbox --sample clear`: persistent resizable Vulkan window, event polling, paced frames,
     Escape/close handling, reported errors, and renderer-before-window teardown. Default command
     remains Smoke. MSVC delay-load and app-local deployment preserve non-Vulkan startup paths.
-  - `--sample triangle`, sample-local GLSL/precompiled SPIR-V, host-visible vertex/index geometry,
+  - `--sample triangle`, sample-local GLSL/precompiled SPIR-V, staged device-local vertex/index geometry,
     and a private `VulkanTrianglePipeline`. Dynamic viewport/scissor preserve the pipeline across
     extent-only changes; color-format changes rebuild it after idle. No shader system or RHI.
   - `Platform::ExecutableDirectory()` supports executable-relative Sandbox asset lookup. Both
     Vulkan samples share the Sandbox event loop; Clear has no shader asset requirement.
+  - M2B-1 private `VulkanAllocator`: VMA 3.4.0 from the existing pinned registry, Vulkan 1.3
+    runtime contract, one implementation TU, and allocator-before-device destruction.
+  - Private `VulkanBuffer`: buffer/VMA allocation ownership, explicit None/SequentialWrite/Random
+    CPU intent, logical versus allocation slice size, and allocation-relative map/cache operations.
+    Native memory-selection/allocation is retained as the M2A exercise in Git history, not a second backend.
+  - M2A private `VulkanBufferUpload`: one graphics-queue copy, explicit consumer barrier and fence,
+    retained pending ownership, and destination transfer after completion. Triangle uploads 66 bytes
+    once; vertex/index bindings remain at offsets 0/60 and geometry survives extent-only recreation.
 - Verified:
+  - 2026-09-29, M2B-1 on VS2026 Debug/RelWithDebInfo: both builds passed; full opt-in CTest
+    passed 73/73 per configuration without skips, with Khronos synchronization/submit-time
+    validation enabled and zero validation errors/warnings. Eight live host allocations shared
+    one VMA block; nonzero-offset read/write isolation, allocator moves, live allocation release,
+    wrong-device upload rejection, host-intent enforcement and exact upload roundtrips passed.
+    Local host/readback flags were 14 (visible/coherent/cached), staging 6, geometry 1; native
+    non-coherent cache behavior remains unexercised. No new RenderDoc/pixel comparison this slice.
+    Formal Debug Triangle/Clear/Smoke passed resize/maximize/minimize/restore and close/Escape,
+    each exiting with code 0. Triangle uploaded 66 bytes once (80-byte VMA slice), submitted 305
+    indexed draws and reached swapchain generation 5; Vulkan logs had no validation errors/warnings.
+    Smoke's inspected module list contained no Vulkan Loader.
+  - 2026-09-29: the user reported M2A tests complete and authorized the next step. The message
+    did not specify additional configurations or coverage beyond the existing recorded evidence.
+  - 2026-09-24, M2A on VS2026 Debug/RelWithDebInfo: builds passed. With the existing local
+    Khronos Validation Layer 1.4.357 and synchronization/submit-time validation enabled, full
+    CTest passed 71/71 in each configuration with no skips and zero validation errors/warnings.
+    Coverage includes host mapping/moves/replacement, exact 1/3/4/65/66/67/4097-byte roundtrips
+    plus triangle bytes, single-transfer destination ownership, and Clear/Triangle lifecycle.
+    The staged triangle reported 66 logical bytes, 80 allocation bytes, staging flags 6
+    (host-visible/coherent), and destination flags 1 (device-local) on the local RTX 5060.
+    Terminal cleanup branches were reviewed, not validated by native failure injection.
+  - Formal Debug Triangle/Clear/Smoke each passed resize, maximize, minimize/restore, and normal
+    close/Escape with exit code 0. Triangle presented 310 indexed frames; Clear presented 309
+    frames with no indexed draws. Both Vulkan samples reached swapchain generation 4 and logged
+    zero validation errors/warnings. The triangle uploaded geometry once across these changes.
+  - Fresh RenderDoc 1.43 capture/MCP replay of the M2A Debug triangle: one indexed draw at EID 16,
+    three indices/one instance; exported 66-byte Buffer 98 matches the CPU payload exactly.
+    Native replay confirms vertex offset/stride 0/20 and index offset/stride 60/2 on that buffer.
+    The 1280x720 target matches the earlier M1 capture pixel-for-pixel (921,600 pixels, zero diffs).
+    Captured process loaded only the intended 1.43 capture DLL and closed with exit code 0.
   - 2026-09-14, VS2026 Debug and RelWithDebInfo: both build presets succeeded; each default CTest
     preset reported 58 passed, 5 opt-in GPU tests skipped, and 0 failed.
   - Both configurations passed all five GPU tests with `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1` on
@@ -100,14 +138,14 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     maximize, minimize, restore, and close/Escape completed; both Vulkan samples reached swapchain
     generation 5. Complete logs contained zero validation errors or warnings. Recording overlays
     were disabled for these diagnostic processes; SDK layer registration was not changed.
+  - 2026-09-23: the user confirmed M1 has no remaining issue, closing the pending manual visual
+    acceptance. Together with the recorded validation and RenderDoc results, this completes M1
+    for the local VS2026 scope. This is user-reported visual acceptance, not a new automated run.
 - Unverified:
   - The current revision on VS2022; validate it on the separate VS2022 computer.
   - GPU creation on hardware with separate graphics/present families (CPU policy tests cover it).
   - Native resource/submit/fence failure injection and driver-returned out-of-date recovery;
     policy branches and synchronization/lifetime code are tested/reviewed, not fault-injected.
-  - Complete client-edge inspection during continuous manual dragging. Programmatic window
-    recovery and a 10,000-frame validation-clean run are verified; partial desktop snapshots do
-    not certify every border pixel. The existing RenderDoc/MCP capture predates the barrier fix.
   - Native non-coherent flush and live color-format replacement paths: policy/static review covers
     them, but this GPU selected coherent memory and resizing retained the color format.
 
@@ -116,8 +154,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | Milestone | Delivery | Validation | Completion condition |
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
-| M1 Vulkan Bootstrap and Frame Lifecycle | Implemented through indexed triangle and rendered window recovery; final visual checks pending | Both configurations' CPU/GPU tests and Debug 12,124-frame synchronization-validation run pass; earlier RenderDoc/MCP inspection passes | Visual triangle acceptance, 10,000 validation-clean frames, and RenderDoc capture |
-| M2-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
+| M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
+| M2 GPU Resources, Memory, and Uploads | M2A and M2B-1 allocation slice implemented; textures through M2D remain | Both configurations pass 73/73 with synchronization validation; VMA isolation/release and exact readback pass; RenderDoc evidence remains from M2A | Textured indexed mesh, generated mips, safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
 
@@ -158,14 +197,17 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     flags as well as pixel size. Surface/device loss is terminal; automatic recovery is deferred.
   - Presentation fences establish resource release, not display scanout completion. Compatibility
     fallback runs successfully locally but lacks the same specification-level release guarantee.
-  - Triangle geometry uses a small immutable host-visible allocation; staging/upload allocation,
-    general Shader System, and RHI are intentionally deferred.
+  - Buffer allocation now uses VMA; uploads still block once at startup on the graphics queue.
+    Streamed/per-frame uploads, texture resources, a general Shader System, and RHI remain later work.
 
 ## Entry Points and Evidence
 
 - Authoritative roadmap: `docs/superpowers/specs/2026-08-17-owlengine-roadmap-design.md`
-- Active milestone design: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md`
-- Active implementation plan: `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
+- Active milestone design: `docs/superpowers/specs/2026-09-23-owlengine-m2-design.md`
+- First M2 implementation plan: `docs/superpowers/plans/2026-09-23-owlengine-m2a-buffer-upload.md`
+- Current allocation slice: `docs/superpowers/plans/2026-09-29-owlengine-m2b-vma.md`
+- Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
+  `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
 - Build/test definitions: `CMakePresets.json`, root/module `CMakeLists.txt`, and
   `tests/CMakeLists.txt`
@@ -173,6 +215,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   and `tests/vulkan/VulkanBootstrapTests.cpp`
 - Swapchain contract and tests: `engine/vulkan/src/VulkanSwapchain.h` and
   `tests/vulkan/SwapchainTests.cpp`
+- Allocator/buffer/upload ownership: `engine/vulkan/src/VulkanAllocator.h`, `engine/vulkan/src/VulkanBuffer.h`,
+  `engine/vulkan/src/VulkanBufferUpload.h`, and `tests/vulkan/BufferUploadTests.cpp`.
 - Frame lifecycle and tests: `engine/vulkan/include/owl/vulkan/VulkanTriangle.h`,
   `engine/vulkan/src/VulkanTriangle.cpp`, `engine/vulkan/src/VulkanFrame.h`, and
   `tests/vulkan/FrameTests.cpp`
@@ -189,10 +233,16 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Validation setup and acceptance findings: `docs/learning/m1-vulkan-bootstrap.md`; detailed
   2026-09-23 logs are in `build/diagnostics/m1-validation-20260923/` (local, ignored). Use
   `fixed-gpu/`, `fixed-sandbox/`, and `fixed-verification.md` for the corrected implementation.
+- M2A acceptance logs, scripts, captured frame, exported pixels/buffer, and verification summary:
+  `build/diagnostics/m2a-20260924/` (local, ignored). Validation uses the existing copy-only SDK;
+  RenderDoc uses process-local `VK_IMPLICIT_LAYER_PATH`, with system registration unchanged.
+- M2B-1 local validation logs and scripts: `build/diagnostics/m2b-vma-20260929/` (ignored).
 
 ## Next Work
 
-- Next task: finish the remaining manual window visual checks and consolidate M1 acceptance.
-  Preserve the RenderDoc/MCP inspection baseline; M2 resource/memory/upload design follows M1.
-- Keep the native Vulkan baseline and the existing clear/smoke regressions. VS2022 validation
-  belongs to the separate workstation. Do not mark M1 complete from build or unvalidated GPU passes.
+- Next checkpoint: design the M2B texture slice against the VMA-backed buffer/upload path:
+  image/view/sampler ownership, texture upload, minimal descriptor binding and mip generation.
+  Start from a procedural checkerboard indexed quad; share frame plumbing and preserve explicit synchronization.
+- Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
+  per-frame uploads, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
+  queue families remain out of scope. VS2022 validation belongs to the separate workstation.

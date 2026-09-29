@@ -3,37 +3,42 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
-#include <initializer_list>
-
-namespace
+TEST_CASE("Buffer descriptions require explicit and consistent host access", "[vulkan][buffer]")
 {
-    VkPhysicalDeviceMemoryProperties Properties(std::initializer_list<VkMemoryPropertyFlags> flags)
-    {
-        VkPhysicalDeviceMemoryProperties properties{};
-        properties.memoryTypeCount = static_cast<std::uint32_t>(flags.size());
-        std::uint32_t index = 0;
-        for (const auto value : flags)
-            properties.memoryTypes[index++].propertyFlags = value;
-        return properties;
-    }
+    using owl::vulkan::BufferHostAccess;
+    using owl::vulkan::detail::IsBufferDescValid;
+    owl::vulkan::VulkanBufferDesc desc{
+        .size = 66,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .requiredMemory = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    };
+    CHECK(IsBufferDescValid(desc));
+    desc.requiredMemory |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    CHECK_FALSE(IsBufferDescValid(desc));
+    desc.hostAccess = BufferHostAccess::SequentialWrite;
+    CHECK(IsBufferDescValid(desc));
+    desc.hostAccess = BufferHostAccess::Random;
+    CHECK(IsBufferDescValid(desc));
+    desc.requiredMemory = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    CHECK_FALSE(IsBufferDescValid(desc));
+    desc.hostAccess = static_cast<BufferHostAccess>(99);
+    CHECK_FALSE(IsBufferDescValid(desc));
 }
 
-TEST_CASE("Buffer memory policy ranks preferred flags and supports combined local host memory",
-          "[vulkan][buffer]")
+TEST_CASE("Buffer descriptions reject unsupported allocation contracts", "[vulkan][buffer]")
 {
-    const auto properties = Properties({VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT});
-    using owl::vulkan::detail::SelectBufferMemoryType;
-    CHECK(SelectBufferMemoryType(properties, 0b111, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 1);
-    CHECK(SelectBufferMemoryType(properties, 0b101, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == 2);
-    CHECK_FALSE(SelectBufferMemoryType(properties, 0b001, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                       0));
-    CHECK_FALSE(SelectBufferMemoryType(properties, 0, 0, 0));
+    using owl::vulkan::detail::IsBufferDescValid;
+    owl::vulkan::VulkanBufferDesc desc{.size = 66, .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT};
+    CHECK(IsBufferDescValid(desc));
+    SECTION("zero size") { desc.size = 0; }
+    SECTION("zero usage") { desc.usage = 0; }
+    SECTION("device address") { desc.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT; }
+    SECTION("protected memory") { desc.requiredMemory = VK_MEMORY_PROPERTY_PROTECTED_BIT; }
+    SECTION("unsupported preferred memory")
+    {
+        desc.preferredMemory = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+    }
+    CHECK_FALSE(IsBufferDescValid(desc));
 }
 
 TEST_CASE("Buffer ranges reject overflow and accept an empty end range", "[vulkan][buffer]")

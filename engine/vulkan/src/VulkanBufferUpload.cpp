@@ -1,5 +1,6 @@
 #include "VulkanBufferUpload.h"
 
+#include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 
 #include <limits>
@@ -114,7 +115,8 @@ namespace owl::vulkan
     }
 
     std::optional<VulkanBufferUpload>
-    VulkanBufferUpload::Create(const VulkanDevice& device, const std::span<const std::byte> bytes,
+    VulkanBufferUpload::Create(const VulkanDevice& device, const VulkanAllocator& allocator,
+                               const std::span<const std::byte> bytes,
                                const VkBufferUsageFlags finalUsage,
                                const VkPipelineStageFlags2 consumerStages,
                                const VkAccessFlags2 consumerAccess, std::string& error)
@@ -151,6 +153,12 @@ namespace owl::vulkan
             return std::nullopt;
         }
 
+        if (!allocator.IsValid() || allocator.Device() != device.Get())
+        {
+            error = "Buffer upload requires an allocator belonging to its device";
+            return std::nullopt;
+        }
+
         VulkanBufferUpload result;
         result.device_ = &device;
         const VulkanBufferDesc stagingDesc{
@@ -158,8 +166,9 @@ namespace owl::vulkan
             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
             .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            .hostAccess = BufferHostAccess::SequentialWrite,
         };
-        result.staging_ = VulkanBuffer::Create(device, stagingDesc, error);
+        result.staging_ = VulkanBuffer::Create(allocator, stagingDesc, error);
         if (!result.staging_)
             return std::nullopt;
         result.stagingMemoryProperties_ = result.staging_->MemoryProperties();
@@ -169,7 +178,7 @@ namespace owl::vulkan
             .usage = finalUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .requiredMemory = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         };
-        result.destination_ = VulkanBuffer::Create(device, destinationDesc, error);
+        result.destination_ = VulkanBuffer::Create(allocator, destinationDesc, error);
         if (!result.destination_)
             return std::nullopt;
         if (!result.staging_->Write(0, bytes, error))

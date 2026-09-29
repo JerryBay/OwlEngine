@@ -43,7 +43,32 @@ CPU 不再访问某个句柄，不意味着可以立即销毁 GPU 仍在使用�
 **Coherent 不等于同步完成**，也不允许 CPU 随意覆盖 GPU 正在读取的数据。
 `DEVICE_LOCAL` 与 `HOST_VISIBLE` 并不互斥，不能简单把它们理解为“显存”和“系统内存”二选一。
 
-继续深入：非 coherent 内存的范围与对齐要求，以及独立显卡和统一内存架构下直接映射、Staging 上传的取舍。
+Staging 上传把 CPU 写入位置与 GPU 长期使用位置分开：CPU 写可映射的临时 Buffer，GPU 通过 Copy
+把数据移入目标 Buffer。需要分别解决三个问题：非 coherent 主机写入要 Flush；Copy 写入到后续
+顶点／索引读取要建立内存依赖；CPU 释放临时 Buffer 和命令资源前要确认 GPU 已完成使用。
+Fence 等待不能代替 Flush 或 GPU 内存依赖，Barrier 也不能代替 CPU 对完成状态的确认。
+
+Readback 是反向路径：GPU Copy 到可映射的目标，建立 transfer-write 到 host-read 的依赖，
+等待完成后，对非 coherent 内存 Invalidate，再由 CPU 读取。Flush/Invalidate 的范围必须满足
+`nonCoherentAtomSize` 规则；对单独分配且无并发访问的内存，映射整个分配并使用 offset 0 /
+`VK_WHOLE_SIZE` 是一种起步策略。多个子分配共享底层内存时，不能直接照搬整块内存的操作范围。
+资源的逻辑字节数与原生分配大小也要区分：内存需求有对齐约束，不代表每次 Buffer Copy 都要额外补齐。
+
+VMA 将多个资源的 allocation 放入较大的 `VkDeviceMemory` block，按资源要求处理内存类型、
+对齐和分配；某些资源也可能单独分配。**allocation 的大小与 block 的保留大小不同**：释放资源后，
+分配器仍可保留空闲 block 供复用，不能仅凭保留内存未归零就判定资源泄漏。
+
+使用 VMA 映射时，返回的指针已指向 allocation 起点；Flush/Invalidate 的偏移也相对此 allocation。
+不应再加一次它在 block 内的 offset。VMA 会处理底层范围与 atom 对齐，但不会替应用补上 GPU Barrier、
+等待 Fence 或判断何时销毁资源。`AUTO` 分配需要明确 CPU 访问意图：顺序写适合上传，随机访问适合回读；
+实际 memory type 碰巧带有 `HOST_VISIBLE` 不等于分配时已声明可映射。
+参见 [VMA：映射与缓存管理](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/memory_mapping.html)。
+
+Staging 不是所有硬件上的唯一选择。统一内存架构或 host-visible/device-local 内存可能允许直接写入；
+是否值得增加一次 Copy，需要结合 CPU 访问方式、GPU 重用频率和带宽衡量。无论选哪条路径，都不能覆盖
+GPU 仍在读取的范围；启动时阻塞上传与运行时多帧上传也需要不同的回收策略。
+
+继续深入：部分非 coherent 范围的对齐、批量上传与完成后回收，以及独立显卡和统一内存的性能取舍。
 参见 [Khronos：内存分配](https://docs.vulkan.org/guide/latest/memory_allocation.html)。
 
 ## 4. Shader、Pipeline 与 Pipeline Layout

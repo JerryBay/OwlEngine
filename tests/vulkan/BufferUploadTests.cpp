@@ -1,5 +1,6 @@
 #include "VulkanBufferUpload.h"
 
+#include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 #include "VulkanDeviceSelection.h"
 #include "VulkanInstance.h"
@@ -41,6 +42,7 @@ namespace
         std::optional<owl::vulkan::VulkanSurface> surface;
         std::optional<owl::vulkan::VulkanDeviceSelection> selection;
         std::optional<owl::vulkan::VulkanDevice> device;
+        std::optional<owl::vulkan::VulkanAllocator> allocator;
 
         GpuContext() = default;
         GpuContext(const GpuContext&) = delete;
@@ -84,6 +86,10 @@ namespace
         result.device = owl::vulkan::VulkanDevice::Create(
             *result.selection, error, result.instance->PresentationSupport());
         if (!result.device)
+            return std::nullopt;
+        result.allocator = owl::vulkan::VulkanAllocator::Create(
+            result.instance->Get(), *result.device, error);
+        if (!result.allocator)
             return std::nullopt;
         error.clear();
         return std::optional<GpuContext>{std::move(result)};
@@ -136,6 +142,7 @@ namespace
     }
 
     bool Readback(const owl::vulkan::VulkanDevice& device,
+                  const owl::vulkan::VulkanAllocator& allocator,
                   const owl::vulkan::VulkanBuffer& source, std::span<std::byte> output,
                   VkMemoryPropertyFlags& memoryProperties, std::string& error)
     {
@@ -144,8 +151,9 @@ namespace
             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
             .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            .hostAccess = owl::vulkan::BufferHostAccess::Random,
         };
-        auto readback = owl::vulkan::VulkanBuffer::Create(device, desc, error);
+        auto readback = owl::vulkan::VulkanBuffer::Create(allocator, desc, error);
         if (!readback)
             return false;
         memoryProperties = readback->MemoryProperties();
@@ -297,10 +305,11 @@ TEST_CASE("Buffer upload rejects early destination transfer", "[vulkan][buffer-u
     CHECK_FALSE(emptyError.empty());
 
     owl::vulkan::VulkanDevice device;
+    owl::vulkan::VulkanAllocator allocator;
     std::string error;
     const std::array<std::byte, 1> payload{std::byte{0x42}};
     auto upload = owl::vulkan::VulkanBufferUpload::Create(
-        device, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead, error);
+        device, allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead, error);
     CHECK_FALSE(upload.has_value());
     CHECK_FALSE(error.empty());
 }
@@ -318,12 +327,129 @@ TEST_CASE("Vulkan buffer upload rejects destination transfer before completion",
     REQUIRE(context->device.has_value());
     const std::array<std::byte, 1> payload{std::byte{0x42}};
     auto upload = owl::vulkan::VulkanBufferUpload::Create(
-        *context->device, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead, error);
+        *context->device, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        CopyStage, CopyRead, error);
     INFO(error);
     REQUIRE(upload.has_value());
     CHECK_FALSE(upload->IsPending());
     CHECK_FALSE(upload->TakeDestination(error).has_value());
     CHECK_FALSE(error.empty());
+
+    auto otherDevice = owl::vulkan::VulkanDevice::Create(*context->selection, error);
+    REQUIRE(otherDevice.has_value());
+    CHECK_FALSE(owl::vulkan::VulkanBufferUpload::Create(
+        *otherDevice, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        CopyStage, CopyRead, error));
+    CHECK(error.find("allocator belonging to its device") != std::string::npos);
+}
+
+TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and release",
+          "[vulkan][buffer][integration]")
+{
+    if (!IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local allocator test");
+
+    std::string error;
+    auto context = CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context.has_value());
+    VmaTotalStatistics baseline{};
+    vmaCalculateStatistics(context->allocator->Get(), &baseline);
+    // Declared before buffers so failed assertions also release buffers before this owner.
+    std::optional<owl::vulkan::VulkanAllocator> movedAllocator;
+    {
+        constexpr std::size_t count = 8;
+        constexpr std::size_t size = 67;
+        const owl::vulkan::VulkanBufferDesc desc{
+            .size = size,
+            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            .hostAccess = owl::vulkan::BufferHostAccess::Random,
+        };
+        std::vector<owl::vulkan::VulkanBuffer> buffers;
+        std::array<std::array<std::byte, size>, count> expected{};
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            auto buffer = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
+            REQUIRE(buffer.has_value());
+            expected[index].fill(static_cast<std::byte>(index + 1));
+            REQUIRE(buffer->Write(0, expected[index], error));
+            buffers.push_back(std::move(*buffer));
+        }
+
+        movedAllocator.emplace(std::move(*context->allocator));
+        CHECK_FALSE(context->allocator->IsValid());
+        VmaTotalStatistics active{};
+        vmaCalculateStatistics(movedAllocator->Get(), &active);
+        CHECK(active.total.statistics.allocationCount ==
+              baseline.total.statistics.allocationCount + count);
+        owl::foundation::LogMessage(
+            owl::foundation::LogLevel::Info, "Vulkan",
+            "VMA isolation test: allocations=" +
+                std::to_string(active.total.statistics.allocationCount) +
+                ", blocks=" + std::to_string(active.total.statistics.blockCount) +
+                ", hostFlags=" + std::to_string(buffers.front().MemoryProperties()));
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            const std::array<std::byte, 3> patch{std::byte{0xA1}, std::byte{0xB2},
+                                               static_cast<std::byte>(index)};
+            REQUIRE(buffers[index].Write(5, patch, error));
+            std::copy(patch.begin(), patch.end(), expected[index].begin() + 5);
+            CHECK_FALSE(buffers[index].Write(size - 1, patch, error));
+            CHECK(buffers[index].Write(size, {}, error));
+        }
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            std::array<std::byte, size> actual{};
+            REQUIRE(buffers[index].Read(0, actual, error));
+            CHECK(actual == expected[index]);
+            std::array<std::byte, 3> partial{};
+            REQUIRE(buffers[index].Read(5, partial, error));
+            CHECK(std::equal(partial.begin(), partial.end(), expected[index].begin() + 5));
+            CHECK_FALSE(buffers[index].Read(size - 1, partial, error));
+        }
+        *context->allocator = std::move(*movedAllocator);
+        CHECK_FALSE(movedAllocator->IsValid());
+    }
+    VmaTotalStatistics released{};
+    vmaCalculateStatistics(context->allocator->Get(), &released);
+    CHECK(released.total.statistics.allocationCount == baseline.total.statistics.allocationCount);
+    CHECK(released.total.statistics.allocationBytes == baseline.total.statistics.allocationBytes);
+    // Reserved blocks may remain cached by VMA; they are not live allocations.
+}
+
+TEST_CASE("Vulkan buffers enforce host intent independently of physical memory flags",
+          "[vulkan][buffer][integration]")
+{
+    if (!IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local allocator test");
+
+    std::string error;
+    auto context = CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context.has_value());
+    owl::vulkan::VulkanBufferDesc desc{
+        .size = 3,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .preferredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+    };
+    std::array<std::byte, 3> bytes{std::byte{1}, std::byte{2}, std::byte{3}};
+    auto gpuOnly = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
+    REQUIRE(gpuOnly.has_value());
+    CHECK_FALSE(gpuOnly->Write(0, bytes, error));
+    CHECK_FALSE(gpuOnly->Read(0, bytes, error));
+
+    desc.requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    CHECK_FALSE(owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error));
+    desc.hostAccess = owl::vulkan::BufferHostAccess::SequentialWrite;
+    auto staging = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
+    REQUIRE(staging.has_value());
+    REQUIRE(staging->Write(0, bytes, error));
+    CHECK_FALSE(staging->Read(0, bytes, error));
+
+    owl::vulkan::VulkanAllocator emptyAllocator;
+    CHECK_FALSE(owl::vulkan::VulkanBuffer::Create(emptyAllocator, desc, error));
 }
 
 TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][integration]")
@@ -342,8 +468,9 @@ TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][inte
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
         .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        .hostAccess = owl::vulkan::BufferHostAccess::Random,
     };
-    auto source = owl::vulkan::VulkanBuffer::Create(*context->device, desc, error);
+    auto source = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
     INFO(error);
     REQUIRE(source.has_value());
     REQUIRE(source->Write(0, payload, error));
@@ -358,7 +485,7 @@ TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][inte
     REQUIRE(moved.Read(0, actual, error));
     CHECK(actual == payload);
 
-    auto replacement = owl::vulkan::VulkanBuffer::Create(*context->device, desc, error);
+    auto replacement = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
     INFO(error);
     REQUIRE(replacement.has_value());
     *replacement = std::move(moved);
@@ -387,7 +514,7 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
         const auto payload = caseIndex == sizes.size() - 1 ? TrianglePayload() : Pattern(size);
         REQUIRE(payload.size() == size);
         auto upload = owl::vulkan::VulkanBufferUpload::Create(
-            *context->device, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead,
+            *context->device, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead,
             error);
         INFO(error);
         REQUIRE(upload.has_value());
@@ -417,7 +544,8 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
         CHECK_FALSE(error.empty());
         std::vector<std::byte> actual(size);
         VkMemoryPropertyFlags readbackMemoryProperties = 0;
-        CHECK(Readback(*context->device, *destination, actual, readbackMemoryProperties, error));
+        CHECK(Readback(*context->device, *context->allocator, *destination, actual,
+                       readbackMemoryProperties, error));
         INFO(error);
         CHECK(actual == payload);
         if (destination)

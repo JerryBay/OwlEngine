@@ -33,7 +33,8 @@ namespace owl::vulkan
         VulkanTrianglePipeline(const VulkanTrianglePipeline&) = delete;
         VulkanTrianglePipeline& operator=(const VulkanTrianglePipeline&) = delete;
 
-        [[nodiscard]] bool Initialize(const VulkanDevice& device, const TriangleShaderPaths& paths,
+        [[nodiscard]] bool Initialize(const VulkanDevice& device, const VulkanAllocator& allocator,
+                                      const TriangleShaderPaths& paths,
                                       std::string& error);
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
         // Completes the startup geometry upload and installs the device-local destination.

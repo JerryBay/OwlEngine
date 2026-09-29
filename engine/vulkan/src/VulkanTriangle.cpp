@@ -1,6 +1,7 @@
 #include <owl/vulkan/VulkanTriangle.h>
 
 #include "SDLWindowAccess.h"
+#include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 #include "VulkanFrame.h"
 #include "VulkanInstance.h"
@@ -25,6 +26,7 @@ namespace owl::vulkan
         VulkanInstance instance;
         VulkanSurface surface;
         VulkanDevice device;
+        VulkanAllocator allocator;
         VulkanSwapchain swapchain;
         VulkanFrameResources frames;
         VulkanTrianglePipeline triangle;
@@ -525,7 +527,12 @@ namespace owl::vulkan
         impl->device = std::move(*device);
         if (options.triangleShaders)
         {
-            if (!impl->triangle.Initialize(impl->device, *options.triangleShaders, error))
+            auto allocator = VulkanAllocator::Create(impl->instance.Get(), impl->device, error);
+            if (!allocator)
+                return std::nullopt;
+            impl->allocator = std::move(*allocator);
+            if (!impl->triangle.Initialize(impl->device, impl->allocator,
+                                           *options.triangleShaders, error))
                 return std::nullopt;
             impl->drawTriangle = true;
         }

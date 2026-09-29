@@ -179,6 +179,17 @@ Vulkan Loader beside the executable; this does not install a GPU driver or a Val
 
 ## Run the Indexed Triangle Sample
 
+The triangle uses staging plus a GPU copy into device-local vertex/index geometry. M2B-1 uses
+VMA 3.4.0 from the pinned vcpkg manifest for buffer allocation; it needs no extra SDK or DLL.
+Startup logs report 66 copied bytes, the VMA allocation slice size (not the memory block size), and
+selected staging/destination memory flags; resizing does not upload the geometry again.
+
+For resource acceptance, enable the process-local validation settings above, set
+`OWL_RUN_VULKAN_BOOTSTRAP_TEST=1`, and run both full CTest presets. The full run includes VMA
+mapping isolation/host intent/moves/allocation release, exact upload/readback patterns, and Clear/Triangle lifecycle tests; the
+older `^Vulkan .* locally$` filter does not select every buffer-upload case. Check actual Khronos
+layer activation and the full logs. A run reporting an unavailable layer is only runtime evidence.
+
 ```powershell
 ./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle
 $LASTEXITCODE

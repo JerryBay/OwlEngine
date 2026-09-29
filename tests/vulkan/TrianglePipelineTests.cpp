@@ -1,32 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "VulkanTrianglePipeline.h"
-#include "VulkanBuffer.h"
 
 #include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-
-TEST_CASE("Buffer memory selection respects required and preferred flags",
-          "[vulkan][triangle]")
-{
-    VkPhysicalDeviceMemoryProperties properties{};
-    properties.memoryTypeCount = 3;
-    properties.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    properties.memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-    properties.memoryTypes[2].propertyFlags =
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    using owl::vulkan::detail::SelectBufferMemoryType;
-    CHECK(SelectBufferMemoryType(properties, 0b111, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 2);
-    CHECK(SelectBufferMemoryType(properties, 0b011, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 1);
-    CHECK_FALSE(SelectBufferMemoryType(properties, 0b001, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
-    CHECK_FALSE(SelectBufferMemoryType(properties, 0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
-}
 
 TEST_CASE("Triangle SPIR-V loading rejects missing truncated and invalid binaries",
           "[vulkan][triangle]")

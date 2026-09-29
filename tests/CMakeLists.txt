@@ -1,4 +1,5 @@
 find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 set(OWL_FOUNDATION_TEST_SOURCES
     foundation/AssertTests.cpp
@@ -46,6 +47,7 @@ target_link_libraries(OwlUnitTests PRIVATE
     OwlPlatform
     OwlVulkan
     Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
 )
 
 owl_enable_warnings(OwlUnitTests)

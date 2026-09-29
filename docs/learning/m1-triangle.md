@@ -10,18 +10,23 @@ draw inside that rendering scope. Leaving it absent preserves the original clear
 `VulkanTrianglePipeline` owns one immutable buffer containing three vertices followed by three
 16-bit indices. A vertex is two position floats and three color floats. Buffer usage enables both
 vertex and index reads; the two binding commands point to different byte offsets in the same buffer.
-This is sample geometry ownership, not a general GPU buffer or allocator abstraction.
+Vertex data occupies 60 bytes; indices occupy 6 bytes, beginning at offset 60.
 
-Buffer creation describes size and use; allocation provides the backing memory. The chosen memory
-type must appear in the buffer's `memoryTypeBits` and be host-visible. Coherent memory is preferred;
-otherwise the code flushes the whole mapped allocation before unmapping. `offset=0` and
-`VK_WHOLE_SIZE` avoid a partial non-coherent atom range. Queue submission makes preceding flushed
-host writes available for GPU reads. No CPU writes occur while frames are in flight.
+At the M1 checkpoint, geometry used a directly mapped host-visible allocation. M2A replaces that
+path with a temporary host-visible staging buffer and a device-local destination. M2B-1 retains
+that path and moves allocation to VMA: `VulkanBuffer` owns a buffer and allocation slice, while
+the renderer owns their allocator. `VulkanBufferUpload` owns the copy and its temporary resources.
+The visible geometry and shaders are unchanged.
 
-This direct upload keeps the first memory contract visible. It does not promise optimal discrete-GPU
-placement: device-local buffers plus staging and a reusable upload path belong to the next resource
-milestone. A D3D12 implementation will express upload/default heap placement and resource states
-through different API contracts; this sample does not try to unify them yet.
+The startup path writes exactly 66 bytes to staging, flushes if its memory is non-coherent, submits
+`vkCmdCopyBuffer`, and records a transfer-write to vertex/index-read barrier. A successful fence wait
+allows staging and command resources to be released and destination ownership to pass to the pipeline.
+The startup wait is deliberate; drawing does not introduce a per-frame idle wait.
+
+Buffer creation describes logical size/use; allocation obeys native memory requirements, which may
+require more bytes than the payload. `DEVICE_LOCAL` does not exclude `HOST_VISIBLE`, so this path
+expresses required properties rather than assuming a specific discrete or unified memory topology.
+A later D3D12 backend will express heap placement and resource states through its own contracts.
 
 References: [host-to-device synchronization](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
 and [mapped memory ranges](https://docs.vulkan.org/refpages/latest/refpages/source/VkMappedMemoryRange.html).
@@ -43,14 +48,15 @@ Dynamic Rendering still requires pipeline color-format compatibility, expressed 
 `VkPipelineRenderingCreateInfo`. Viewport and scissor are dynamic, so changing only window extent
 reuses the pipeline. Changing the color format rebuilds it after the renderer has finished submitted
 work. Geometry and device objects survive swapchain recreation. Pipeline, layout, buffer, and memory
-are released before the device; the borrowed window remains alive through all renderer cleanup.
+are released before the allocator and device; the borrowed window remains alive through cleanup.
 
 Reference: [Khronos Dynamic Rendering sample](https://docs.vulkan.org/samples/latest/samples/extensions/dynamic_rendering/README.html).
 
 ## Verification boundary
 
-CPU tests cover the memory-type filter and shader-file envelope. Opt-in GPU tests exercise indexed
+CPU tests cover buffer description/host-access policy and the shader-file envelope. GPU tests
+also check VMA mapping isolation, moves, allocation release and exact byte roundtrips. They exercise indexed
 draw submission and rendered window lifecycle in both presentation-fence and compatibility modes.
 Counters establish submitted work, not visual correctness. A visual check and RenderDoc draw/output
 inspection are separate acceptance steps; a run without Validation Layer does not establish a
-validation-clean result. See `PROJECT.md` for the current evidence and open M1 checks.
+validation-clean result. See `PROJECT.md` for the accepted M1 evidence and remaining portability limits.

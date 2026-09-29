@@ -11,6 +11,7 @@
       ]
     },
     "spdlog",
-    "vulkan"
+    "vulkan",
+    "vulkan-memory-allocator"
   ]
 }

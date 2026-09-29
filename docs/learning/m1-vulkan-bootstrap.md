@@ -4,6 +4,10 @@ M1 establishes a native Vulkan reference: Instance and Surface, device/queue sel
 Swapchain, two frame slots, Dynamic Rendering, indexed drawing, and window-driven recreation.
 The resource owners make lifetimes explicit; a general RHI and resource allocator remain later work.
 
+Status: accepted for the local VS2026 scope on 2026-09-23. The recorded runtime/capture evidence
+below and the user's confirmation of the remaining manual visual checks establish this status.
+VS2022 and other untested hardware remain separate portability checks.
+
 ## What the checks establish
 
 - CPU tests exercise selection and result policies independently of a GPU.
@@ -51,10 +55,12 @@ Clear presented 707 frames. Triangle, Clear, and Smoke all exited with code 0 an
 through startup, resize/maximize/minimize/restore, rendering, and teardown. Their final
 swapchain generation was 5. Triangle used the close-window path; Clear and Smoke used Escape.
 
-Remaining limits: complete client-edge inspection during continuous manual dragging, VS2022
-on the other workstation, separate graphics/present-family hardware, and native failure
-injection are not established by this run. The earlier RenderDoc/MCP inspection remains a
-separate pre-fix capture; this run verifies the correction using synchronization validation.
+The user subsequently confirmed M1 has no remaining issue, closing manual visual acceptance.
+This is user-reported confirmation; the automated run alone did not inspect every client-edge pixel.
+
+Remaining limits: VS2022 on the other workstation, separate graphics/present-family hardware,
+and native failure injection are not established by this run. The earlier RenderDoc/MCP inspection
+remains a separate pre-fix capture; this run verifies the correction using synchronization validation.
 
 Detailed local logs and the diagnostic harness are in the ignored
 `build/diagnostics/m1-validation-20260923/` directory. `regression-before/` preserves the failing

@@ -47,7 +47,8 @@ namespace owl::vulkan
     } // namespace detail
 
     // Owns one startup copy operation. The device and graphics queue are borrowed and must
-    // outlive this owner. Destruction never waits; callers must drain a submitted operation.
+    // outlive this owner, as must the allocator. Destruction never waits; callers must drain
+    // a submitted operation.
     class VulkanBufferUpload
     {
     public:
@@ -59,7 +60,8 @@ namespace owl::vulkan
         VulkanBufferUpload& operator=(VulkanBufferUpload&& other) noexcept;
 
         [[nodiscard]] static std::optional<VulkanBufferUpload>
-        Create(const VulkanDevice& device, std::span<const std::byte> bytes,
+        Create(const VulkanDevice& device, const VulkanAllocator& allocator,
+               std::span<const std::byte> bytes,
                VkBufferUsageFlags finalUsage, VkPipelineStageFlags2 consumerStages,
                VkAccessFlags2 consumerAccess, std::string& error);
 

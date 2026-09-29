@@ -15,16 +15,24 @@ M0, the reproducible Windows engineering baseline, is complete. It provides the 
 Platform, and Sandbox targets; a visible SDL3 smoke sample; focused CPU and executable tests; and
 Windows CI coverage for Visual Studio 2022 and Visual Studio 2026.
 
-M1, native Vulkan bootstrap and frame lifecycle, is in progress. Instance, Surface, physical-device
-selection, logical Device, queues, Swapchain, and a two-frame clear/draw/present loop are implemented.
+M1, native Vulkan bootstrap and frame lifecycle, is complete for the local VS2026 acceptance scope.
+Instance, Surface, physical-device selection, logical Device, queues, Swapchain, and a two-frame
+clear/draw/present loop are implemented.
 Opt-in local integration tests exercise Dynamic Rendering, synchronization, resize, minimize,
 and restore, with optional presentation fences and a Vulkan 1.3 compatibility path. Sandbox provides
 Smoke, Clear, and indexed Triangle samples. Triangle uses sample-local precompiled SPIR-V and a
 native Dynamic Rendering graphics pipeline. The acquire-to-layout-transition synchronization
 issue is fixed: both configurations' GPU tests and a 12,124-frame Debug run pass synchronization
-validation. Earlier RenderDoc inspection passed; final manual visual checks remain.
+validation. RenderDoc inspection and user-reported manual visual acceptance also passed.
 See [M1 acceptance](docs/learning/m1-vulkan-bootstrap.md) for verification scope and workflow.
-See [project status](PROJECT.md) for verification scope and the next task.
+
+M2 is in implementation. The native M2A exercise established buffer ownership, staging uploads,
+exact GPU readback, and device-local triangle geometry. M2B-1 now uses pinned VMA 3.4.0 for
+allocation, with explicit host-access intent and unchanged upload synchronization. Both local
+VS2026 configurations pass 73/73 tests with synchronization validation. Texture resources,
+sampling and mip generation are next. See the [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
+[VMA migration plan](docs/superpowers/plans/2026-09-29-owlengine-m2b-vma.md), and
+[project status](PROJECT.md) for current verification and remaining limits.
 
 ## Build, Test, and Run on Windows
 

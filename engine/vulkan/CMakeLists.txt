@@ -1,9 +1,14 @@
 find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 add_library(OwlVulkan STATIC)
 
 target_sources(OwlVulkan PRIVATE
     include/owl/vulkan/VulkanTriangle.h
+    src/VulkanAllocator.cpp
+    src/VulkanAllocator.h
+    src/VulkanMemory.cpp
+    src/VulkanMemory.h
     src/VulkanDevice.cpp
     src/VulkanDevice.h
     src/VulkanDeviceSelection.cpp
@@ -37,6 +42,7 @@ target_link_libraries(OwlVulkan PRIVATE
     OwlFoundation
     OwlPlatform
     Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
 )
 
 target_compile_definitions(OwlVulkan PRIVATE
