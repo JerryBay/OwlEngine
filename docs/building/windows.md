@@ -187,14 +187,15 @@ selected staging/destination memory flags; resizing does not upload the geometry
 For resource acceptance, enable the process-local validation settings above, set
 `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1`, and run both full CTest presets. The full run includes VMA
 mapping isolation/host intent/moves/allocation release, exact buffer upload/readback, Image/View/Sampler
-creation/lifetime, and Clear/Triangle lifecycle tests. The older `^Vulkan .* locally$` filter misses
+creation/lifetime, exact single-mip image upload/readback, and Clear/Triangle lifecycle tests.
+The older `^Vulkan .* locally$` filter misses
 resource cases. Check actual Khronos
 layer activation and the full logs. A run reporting an unavailable layer is only runtime evidence.
 
-For the focused image-resource slice, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler)'`
+For image-resource and upload checks, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler)'`
 with the same GPU opt-in and validation environment; replace `debug` with `relwithdebinfo` for the other
-configuration. These cases create resources and check lifetimes without uploading or sampling pixels.
-They do not provide a new visual sample. A multi-mip allocation alone does not prove generated mip contents.
+configuration. These cases check resource lifetimes and uploaded bytes, but do not sample pixels or
+provide a new visual sample. A multi-mip allocation alone does not prove generated mip contents.
 
 ```powershell
 ./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle
@@ -214,6 +215,31 @@ The ordinary build requires no shader compiler. To edit shaders, see the adjacen
 [shader sources and regeneration instructions](../../samples/owl_sandbox/assets/m1/README.md).
 The first pipeline's [ownership and memory notes](../learning/m1-triangle.md) explain its deliberate
 limits; general shader compilation, reflection, and resource allocation systems remain later work.
+
+## Image Upload and Readback Tests
+
+The focused upload tests cover exact RGBA8 UNORM/SRGB roundtrips at 1x1, 1x7, 7x1, 7x3 and 17x9,
+using checkerboard and asymmetric channel patterns. Repeated readback checks layout restoration.
+The same tests check pending ownership, moves, input rejection and live allocations returning to baseline.
+
+From the repository root, build first and enable GPU tests in a non-elevated PowerShell:
+
+```powershell
+cmake --build --preset windows-vs2026-debug
+# For a copy-only SDK, set VK_LAYER_PATH to its Bin directory as described above.
+$env:VK_KHRONOS_VALIDATION_VALIDATE_SYNC = 'true'
+$env:VK_KHRONOS_VALIDATION_SYNCVAL_SUBMIT_TIME_VALIDATION = 'true'
+$env:OWL_RUN_VULKAN_BOOTSTRAP_TEST = '1'
+ctest --preset windows-vs2026-debug -R '^Image upload|^Vulkan image upload' -V
+$LASTEXITCODE
+Remove-Item Env:OWL_RUN_VULKAN_BOOTSTRAP_TEST
+```
+
+Expect 8 passed, no skips, exit code 0 and no Vulkan validation errors. Confirm actual Khronos
+layer activation; missing validation is not a validation-clean result. Without GPU opt-in, four CPU
+tests pass and four GPU cases intentionally skip. GPU cases briefly create a resource-test window;
+they do not display the uploaded texture. Replace `debug` with `relwithdebinfo` after building that
+configuration. Full regression uses the same environment and omits `-R`.
 
 ## Reconfigure from a Clean Build Directory
 

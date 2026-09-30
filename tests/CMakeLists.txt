@@ -21,6 +21,8 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/FrameTests.cpp
     vulkan/ImageTests.cpp
     vulkan/ImageResourceTests.cpp
+    vulkan/ImageUploadTests.cpp
+    vulkan/ImageUploadIntegrationTests.cpp
     vulkan/GpuTestContext.cpp
     vulkan/GpuTestContext.h
     vulkan/SwapchainTests.cpp

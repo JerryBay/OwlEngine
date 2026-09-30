@@ -1,12 +1,13 @@
 # OwlEngine M2 GPU Resources, Memory, and Uploads Design
 
-- Status: M2A and M2B-1 accepted locally; M2B-2 resource ownership implemented (2026-09-29).
+- Status: M2A and M2B-1 accepted locally; M2B-2 resource ownership and image upload verified locally (2026-09-29).
 - Date: 2026-09-23
 - Baseline: M1 accepted locally; native M2A buffer/upload/triangle implementation is in place.
 - Roadmap: [M2](2026-08-17-owlengine-roadmap-design.md#m2-gpu-resources-memory-and-uploads)
 - Completed native exercise: [M2A buffers and staging](../plans/2026-09-23-owlengine-m2a-buffer-upload.md)
 - Completed allocator slice: [M2B-1 VMA migration](../plans/2026-09-29-owlengine-m2b-vma.md)
-- Active texture slice: [M2B-2 image resource ownership](../plans/2026-09-29-owlengine-m2b-image-resources.md)
+- Texture resource slice: [M2B-2 image resource ownership](../plans/2026-09-29-owlengine-m2b-image-resources.md)
+- Current texture slice: [M2B-2 single-mip image upload](../plans/2026-09-29-owlengine-m2b-image-upload.md)
 
 ## 1. Outcome and Learning Goals
 
@@ -196,8 +197,13 @@ system is needed to prove texture ownership and sampling.
 The first texture step now provides these three move-only owners, with RGBA8 UNORM/SRGB,
 single-layer/single-sample 2D images, queried format limits, bounded mip views and basic normalized
 samplers. The [resource plan](../plans/2026-09-29-owlengine-m2b-image-resources.md) defines ownership
-and accepted inputs. Resource creation leaves contents undefined; upload/layout transitions,
-descriptors and the checkerboard draw are the next steps. Allocated mip levels are not generated mips.
+and accepted inputs. Resource creation leaves contents undefined. The second step now adds
+`VulkanImageUpload`: exact tightly packed RGBA8 single-mip input, graphics-queue staging copy,
+explicit layout transitions, fence-observed completion and a one-time image handoff. The
+[upload plan](../plans/2026-09-29-owlengine-m2b-image-upload.md) specifies its bounded lifetime and
+fragment sampled-read contract. Independent image-to-buffer tests restore the final layout and
+compare every byte; this does not establish sampled pixel output. Descriptors and the checkerboard
+draw are next. Allocated mip levels are not generated mips.
 
 Generate mip levels with blits when the selected format supports the required blit and filtering
 features. Query those capabilities. Provide a CPU-generated mip upload fallback with defined

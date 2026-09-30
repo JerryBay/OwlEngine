@@ -89,6 +89,19 @@ LOD 规则，可以用于多个兼容图像，不拥有 Image 或 ImageView。�
 [ImageView](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewCreateInfo.html) 和
 [Sampler](https://docs.vulkan.org/refpages/latest/refpages/source/VkSamplerCreateInfo.html)。
 
+### Buffer 与 Image 之间的像素传输
+
+CPU 像素通常按行连续排列，optimal-tiling Image 的内部存储则由驱动安排。`vkCmdCopyBufferToImage`
+负责按格式和复制区域把线性 Buffer 数据写入 Image，不能把它理解为直接复制到某个显存地址。
+`VkBufferImageCopy` 的 `bufferRowLength`、`bufferImageHeight` 为 0 表示按复制区域紧密排列；
+非零值的单位是 texel，不是字节。RGBA8 的紧密传输数据是 `width × height × 4` 字节，
+这个数仍不等于 Image 的实际分配大小。乘法应先检查溢出，行宽也不能假定为某个固定对齐值。
+
+上传后做 `Image → Readback Buffer → CPU` 的逐字节比较，可以单独证明传输路径，覆盖奇数宽度、
+非方形尺寸和通道顺序。相同 RGBA8 格式的 Buffer/Image Copy 不做 sRGB 解码；采样时的颜色解释
+属于另一环节。因此回读通过不能证明 Descriptor、Sampler、Shader 或最终画面已经正确。
+参见 [Buffer/Image 复制区域](https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferImageCopy.html)。
+
 ## 4. Shader、Pipeline 与 Pipeline Layout
 
 Shader 描述可编程阶段的计算；Graphics Pipeline 把 Shader 与顶点输入、图元装配、光栅化、颜色输出等状态组合起来。
@@ -112,6 +125,13 @@ Dynamic Rendering 省去传统 Render Pass/Framebuffer 对象的创建需求，�
 
 同步要区分**执行依赖**和**内存依赖**：规定操作先后，与让先前写入对后续访问可见，并不是同一件事。
 Barrier 的阶段、访问范围和图像布局需要围绕真实的资源使用来设置。
+
+新建纹理的一条典型路径是 `UNDEFINED → TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`：
+先允许 Copy 写入，再让写入对后续 Shader 采样可见。这里布局描述用途，stage/access 描述执行和内存依赖，
+二者不能互相替代。CPU 中记录一个“当前布局”值也不会执行转换，真正的转换发生在 GPU 执行 Barrier 时。
+当前布局同样不能独自说明最后一次访问：纹理刚转为 Shader 只读布局，可能尚未被任何 Shader 读取。
+测试若立即切换为传输源回读，依赖必须覆盖此前的上传写入和布局转换，而不能凭只读布局假定数据来自 Shader。
+参见 [Khronos 同步示例](https://docs.vulkan.org/guide/latest/synchronization_examples.html)。
 
 - Fence 可用于让 CPU 等待或查询与其关联的 GPU 提交完成。
 - Semaphore 用于建立提交之间、或获取／渲染／呈现之间的依赖；Timeline Semaphore 还支持主机操作。

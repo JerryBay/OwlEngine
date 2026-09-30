@@ -23,6 +23,8 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanInstance.h
     src/VulkanImage.cpp
     src/VulkanImage.h
+    src/VulkanImageUpload.cpp
+    src/VulkanImageUpload.h
     src/VulkanImageView.cpp
     src/VulkanImageView.h
     src/VulkanSampler.cpp
