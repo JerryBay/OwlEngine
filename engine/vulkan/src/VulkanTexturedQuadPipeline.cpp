@@ -1,4 +1,4 @@
-#include "VulkanTrianglePipeline.h"
+#include "VulkanTexturedQuadPipeline.h"
 
 #include "VulkanDevice.h"
 #include "VulkanShaderBinary.h"
@@ -11,6 +11,30 @@
 #include <span>
 #include <utility>
 
+namespace owl::vulkan::detail
+{
+    std::array<std::byte, 64 * 64 * 4> MakeCheckerboardRgba8() noexcept
+    {
+        std::array<std::byte, 64 * 64 * 4> result{};
+        constexpr std::array<std::byte, 4> light{std::byte{0xF4}, std::byte{0xF7}, std::byte{0xF9},
+                                                 std::byte{0xFF}};
+        constexpr std::array<std::byte, 4> dark{std::byte{0x22}, std::byte{0x29}, std::byte{0x32},
+                                                std::byte{0xFF}};
+        constexpr std::array<std::byte, 4> origin{std::byte{0xE8}, std::byte{0x35}, std::byte{0x35},
+                                                  std::byte{0xFF}};
+        for (std::size_t y = 0; y < 64; ++y)
+        {
+            for (std::size_t x = 0; x < 64; ++x)
+            {
+                const auto& color =
+                    x < 8 && y < 8 ? origin : (((x / 8 + y / 8) & 1) == 0 ? light : dark);
+                std::memcpy(result.data() + (y * 64 + x) * 4, color.data(), 4);
+            }
+        }
+        return result;
+    }
+} // namespace owl::vulkan::detail
+
 namespace owl::vulkan
 {
     namespace
@@ -18,16 +42,17 @@ namespace owl::vulkan
         struct Vertex
         {
             float position[2];
-            float color[3];
+            float uv[2];
         };
-        constexpr std::array<Vertex, 3> Vertices{{
-            {{0.0F, -0.6F}, {1.0F, 0.0F, 0.0F}},
-            {{0.6F, 0.6F}, {0.0F, 1.0F, 0.0F}},
-            {{-0.6F, 0.6F}, {0.0F, 0.0F, 1.0F}},
+        constexpr std::array<Vertex, 4> Vertices{{
+            {{-0.78F, -0.78F}, {0.0F, 0.0F}},
+            {{0.78F, -0.78F}, {1.0F, 0.0F}},
+            {{0.78F, 0.78F}, {1.0F, 1.0F}},
+            {{-0.78F, 0.78F}, {0.0F, 1.0F}},
         }};
-        constexpr std::array<std::uint16_t, 3> Indices{0, 1, 2};
+        constexpr std::array<std::uint16_t, 6> Indices{0, 1, 2, 2, 3, 0};
         constexpr VkDeviceSize IndexOffset = sizeof(Vertices);
-        static_assert(sizeof(Vertex) == 5 * sizeof(float));
+        static_assert(sizeof(Vertex) == 4 * sizeof(float));
         static_assert(IndexOffset % alignof(std::uint16_t) == 0);
 
         bool Check(const VkResult result, const char* operation, std::string& error)
@@ -62,28 +87,31 @@ namespace owl::vulkan
             };
             VkShaderModule shader = VK_NULL_HANDLE;
             if (!Check(vkCreateShaderModule(device, &info, nullptr, &shader),
-                       "vkCreateShaderModule", error))
+                       "vkCreateShaderModule(texture)", error))
                 return false;
             destination = shader;
             return true;
         }
     } // namespace
 
-    VulkanTrianglePipeline::~VulkanTrianglePipeline()
+    VulkanTexturedQuadPipeline::~VulkanTexturedQuadPipeline()
     {
         if (device_ == VK_NULL_HANDLE)
             return;
         vkDestroyPipeline(device_, pipeline_, nullptr);
         vkDestroyPipelineLayout(device_, layout_, nullptr);
+        vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+        vkDestroyDescriptorSetLayout(device_, descriptorLayout_, nullptr);
     }
 
-    bool VulkanTrianglePipeline::Initialize(const VulkanDevice& device,
-                                            const VulkanAllocator& allocator,
-                                            const TriangleShaderPaths& paths, std::string& error)
+    bool VulkanTexturedQuadPipeline::Initialize(const VulkanDevice& device,
+                                                const VulkanAllocator& allocator,
+                                                const TriangleShaderPaths& paths,
+                                                std::string& error)
     {
         if (!device.IsValid() || device_ != VK_NULL_HANDLE)
         {
-            error = "Triangle resources require a valid device and an empty owner";
+            error = "Textured quad requires a valid device and an empty owner";
             return false;
         }
         auto vertex = detail::ReadSampleSpirv(paths.vertex, error);
@@ -103,89 +131,182 @@ namespace owl::vulkan
             VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
         constexpr VkAccessFlags2 geometryAccess =
             VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
-        auto upload = VulkanBufferUpload::Create(
+        auto geometryUpload = VulkanBufferUpload::Create(
             device, allocator, std::as_bytes(std::span{payload}),
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, geometryStages,
             geometryAccess, error);
-        if (!upload)
+        if (!geometryUpload)
             return false;
-        upload_ = std::move(*upload);
-        if (upload_->SubmitAndWait(error) != VK_SUCCESS)
+        geometryUpload_ = std::move(*geometryUpload);
+        if (geometryUpload_->SubmitAndWait(error) != VK_SUCCESS ||
+            WaitForUpload(error) != VK_SUCCESS)
             return false;
-        if (WaitForUpload(error) != VK_SUCCESS)
+
+        constexpr VkExtent2D imageExtent{64, 64};
+        constexpr VulkanImageDesc imageDesc{
+            .extent = imageExtent,
+            .format = VK_FORMAT_R8G8B8A8_UNORM,
+            .mipLevels = 1,
+            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        };
+        const auto pixels = detail::MakeCheckerboardRgba8();
+        auto imageUpload = VulkanImageUpload::Create(device, allocator, imageDesc,
+                                                     std::as_bytes(std::span{pixels}), error);
+        if (!imageUpload)
             return false;
-        // Immutable thereafter. The upload barrier makes the device-local bytes visible to draws.
+        imageUpload_ = std::move(*imageUpload);
+        if (imageUpload_->Submit(error) != VK_SUCCESS || WaitForUpload(error) != VK_SUCCESS)
+            return false;
+        view_ = VulkanImageView::Create(*image_, {}, error);
+        if (!view_)
+            return false;
+        const VulkanSamplerDesc samplerDesc{
+            .minFilter = VK_FILTER_NEAREST,
+            .magFilter = VK_FILTER_NEAREST,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        };
+        sampler_ = VulkanSampler::Create(device, samplerDesc, error);
+        if (!sampler_)
+            return false;
+
+        const VkDescriptorSetLayoutBinding textureBinding{
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        };
+        const VkDescriptorSetLayoutCreateInfo descriptorInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings = &textureBinding,
+        };
+        VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
+        if (!Check(
+                vkCreateDescriptorSetLayout(device_, &descriptorInfo, nullptr, &descriptorLayout),
+                "vkCreateDescriptorSetLayout(texture)", error))
+            return false;
+        descriptorLayout_ = descriptorLayout;
+        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize,
+        };
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        if (!Check(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool),
+                   "vkCreateDescriptorPool(texture)", error))
+            return false;
+        descriptorPool_ = pool;
+        const VkDescriptorSetAllocateInfo allocateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = descriptorPool_,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &descriptorLayout_,
+        };
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (!Check(vkAllocateDescriptorSets(device_, &allocateInfo, &set),
+                   "vkAllocateDescriptorSets(texture)", error))
+            return false;
+        descriptorSet_ = set;
+        const VkDescriptorImageInfo imageInfo{
+            .sampler = sampler_->Get(),
+            .imageView = view_->Get(),
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+        const VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptorSet_,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+        };
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         const VkPipelineLayoutCreateInfo layoutInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptorLayout_,
+        };
         VkPipelineLayout layout = VK_NULL_HANDLE;
         if (!Check(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &layout),
-                   "vkCreatePipelineLayout(triangle)", error))
+                   "vkCreatePipelineLayout(texture)", error))
             return false;
         layout_ = layout;
         error.clear();
         return true;
     }
 
-    VkResult VulkanTrianglePipeline::WaitForUpload(std::string& error)
+    VkResult VulkanTexturedQuadPipeline::WaitForUpload(std::string& error)
     {
-        if (!upload_)
+        if (geometryUpload_)
         {
-            error.clear();
-            return VK_SUCCESS;
+            const auto result = geometryUpload_->Wait(error);
+            if (result == VK_NOT_READY && !geometryUpload_->IsPending())
+                geometryUpload_.reset();
+            else if (result != VK_SUCCESS)
+                return result;
+            else
+            {
+                auto geometry = geometryUpload_->TakeDestination(error);
+                if (!geometry)
+                    return VK_ERROR_INITIALIZATION_FAILED;
+                geometry_ = std::move(*geometry);
+                geometryUpload_.reset();
+            }
         }
-        const auto result = upload_->Wait(error);
-        if (result == VK_NOT_READY && !upload_->IsPending())
+        if (imageUpload_)
         {
-            // A failed submit never owns in-flight work. Release its prepared resources while
-            // preserving the original initialization error for the caller.
-            upload_.reset();
-            return VK_SUCCESS;
+            const auto result = imageUpload_->Wait(error);
+            if (result == VK_NOT_READY && !imageUpload_->IsPending())
+                imageUpload_.reset();
+            else if (result != VK_SUCCESS)
+                return result;
+            else
+            {
+                image_ = imageUpload_->TakeDestination(error);
+                if (!image_)
+                    return VK_ERROR_INITIALIZATION_FAILED;
+                imageUpload_.reset();
+            }
         }
-        if (result != VK_SUCCESS)
-            return result;
-
-        const auto stagingFlags = upload_->StagingMemoryProperties();
-        auto destination = upload_->TakeDestination(error);
-        if (!destination)
-            return VK_ERROR_INITIALIZATION_FAILED;
-        const auto logicalSize = destination->Size();
-        const auto allocationSize = destination->AllocationSize();
-        const auto destinationFlags = destination->MemoryProperties();
-        geometry_ = std::move(*destination);
-        upload_.reset();
-        owl::foundation::LogMessage(
-            owl::foundation::LogLevel::Info, "Vulkan",
-            "Triangle geometry staging upload complete (bytes=" + std::to_string(logicalSize) +
-                ", vmaAllocation=" + std::to_string(allocationSize) +
-                ", stagingFlags=" + std::to_string(stagingFlags) +
-                ", destinationFlags=" + std::to_string(destinationFlags) + ")");
         error.clear();
         return VK_SUCCESS;
     }
 
-    VkResult VulkanTrianglePipeline::DrainUploadForDestruction() noexcept
+    VkResult VulkanTexturedQuadPipeline::DrainUploadForDestruction() noexcept
     {
-        return upload_ ? upload_->DrainForDestruction() : VK_SUCCESS;
+        const auto geometryResult =
+            geometryUpload_ ? geometryUpload_->DrainForDestruction() : VK_SUCCESS;
+        const auto imageResult = imageUpload_ ? imageUpload_->DrainForDestruction() : VK_SUCCESS;
+        return geometryResult == VK_SUCCESS ? imageResult : geometryResult;
     }
 
-    void VulkanTrianglePipeline::MarkUploadDeviceLostForDestruction() noexcept
+    void VulkanTexturedQuadPipeline::MarkUploadCompleteAfterQueueIdleForDestruction() noexcept
     {
-        if (upload_)
-            upload_->MarkDeviceLostForDestruction();
+        if (geometryUpload_)
+            geometryUpload_->MarkCompleteAfterQueueIdleForDestruction();
+        if (imageUpload_)
+            imageUpload_->MarkCompleteAfterQueueIdleForDestruction();
     }
 
-    void VulkanTrianglePipeline::MarkUploadCompleteAfterQueueIdleForDestruction() noexcept
+    void VulkanTexturedQuadPipeline::MarkUploadDeviceLostForDestruction() noexcept
     {
-        if (upload_)
-            upload_->MarkCompleteAfterQueueIdleForDestruction();
+        if (geometryUpload_)
+            geometryUpload_->MarkDeviceLostForDestruction();
+        if (imageUpload_)
+            imageUpload_->MarkDeviceLostForDestruction();
     }
 
-    bool VulkanTrianglePipeline::SetColorFormat(const VkFormat format, std::string& error)
+    bool VulkanTexturedQuadPipeline::SetColorFormat(const VkFormat format, std::string& error)
     {
         error.clear();
         if (layout_ == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED)
         {
-            error = "Triangle pipeline requires initialized geometry and a color format";
+            error = "Textured quad pipeline requires initialized resources and a color format";
             return false;
         }
         if (pipeline_ != VK_NULL_HANDLE && format_ == format)
@@ -208,7 +329,7 @@ namespace owl::vulkan
                                                       VK_VERTEX_INPUT_RATE_VERTEX};
         const std::array<VkVertexInputAttributeDescription, 2> attributes{{
             {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, position)},
-            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
         }};
         const VkPipelineVertexInputStateCreateInfo vertexInput{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -275,7 +396,7 @@ namespace owl::vulkan
         };
         VkPipeline pipeline = VK_NULL_HANDLE;
         if (!Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline),
-                   "vkCreateGraphicsPipelines(triangle)", error))
+                   "vkCreateGraphicsPipelines(texture)", error))
         {
             vkDestroyPipeline(device_, pipeline, nullptr);
             return false;
@@ -284,14 +405,13 @@ namespace owl::vulkan
         pipeline_ = pipeline;
         format_ = format;
         owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
-                                    "Triangle graphics pipeline created (colorFormat=" +
-                                        std::to_string(static_cast<int>(format)) +
-                                        ", dynamic viewport/scissor)");
+                                    "Textured quad graphics pipeline created (colorFormat=" +
+                                        std::to_string(static_cast<int>(format)) + ")");
         return true;
     }
 
-    void VulkanTrianglePipeline::RecordDraw(const VkCommandBuffer command,
-                                            const VkExtent2D extent) const noexcept
+    void VulkanTexturedQuadPipeline::RecordDraw(const VkCommandBuffer command,
+                                                const VkExtent2D extent) const noexcept
     {
         const VkViewport viewport{
             0.0F, 0.0F, static_cast<float>(extent.width), static_cast<float>(extent.height),
@@ -301,6 +421,8 @@ namespace owl::vulkan
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
+                                &descriptorSet_, 0, nullptr);
         const VkBuffer buffer = geometry_.Get();
         vkCmdBindVertexBuffers(command, 0, 1, &buffer, &vertexOffset);
         vkCmdBindIndexBuffer(command, buffer, IndexOffset, VK_INDEX_TYPE_UINT16);

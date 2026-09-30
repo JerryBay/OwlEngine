@@ -187,15 +187,16 @@ selected staging/destination memory flags; resizing does not upload the geometry
 For resource acceptance, enable the process-local validation settings above, set
 `OWL_RUN_VULKAN_BOOTSTRAP_TEST=1`, and run both full CTest presets. The full run includes VMA
 mapping isolation/host intent/moves/allocation release, exact buffer upload/readback, Image/View/Sampler
-creation/lifetime, exact single-mip image upload/readback, and Clear/Triangle lifecycle tests.
+creation/lifetime, exact image/mip upload and per-level readback, and Clear/Triangle/Texture lifecycle tests.
 The older `^Vulkan .* locally$` filter misses
 resource cases. Check actual Khronos
 layer activation and the full logs. A run reporting an unavailable layer is only runtime evidence.
 
-For image-resource and upload checks, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler)'`
+For image-resource and upload checks, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler|mip|Mip)'`
 with the same GPU opt-in and validation environment; replace `debug` with `relwithdebinfo` for the other
-configuration. These cases check resource lifetimes and uploaded bytes, but do not sample pixels or
-provide a new visual sample. A multi-mip allocation alone does not prove generated mip contents.
+configuration. These cases check resource lifetimes, uploaded bytes, both mip generation paths and
+each CPU-generated mip's bytes. GPU blit checks read back lower levels. The Texture visual sample
+still uses one mip; generated mip sampling in a frame is not yet a visual acceptance claim.
 
 ```powershell
 ./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle
@@ -215,6 +216,26 @@ The ordinary build requires no shader compiler. To edit shaders, see the adjacen
 [shader sources and regeneration instructions](../../samples/owl_sandbox/assets/m1/README.md).
 The first pipeline's [ownership and memory notes](../learning/m1-triangle.md) explain its deliberate
 limits; general shader compilation, reflection, and resource allocation systems remain later work.
+
+## Run the Textured Quad Sample
+
+```powershell
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample texture
+$LASTEXITCODE
+```
+
+The quad shows a sharp 8x8 checkerboard over the green clear color. Its red tile is at the
+top-left, making the UV orientation visible. Resize and minimize/restore the window, then exit
+with Escape or the close button. The texture, view, sampler, descriptor and geometry are created
+once; an extent-only Swapchain recreation does not re-upload them. The clip-space quad follows
+the window aspect ratio, so tiles are rectangular in a non-square window.
+
+The build copies the checked-in texture SPIR-V files to `bin/<configuration>/assets/m2/`.
+Running does not require a shader compiler; to edit them, follow the adjacent
+[shader regeneration instructions](../../samples/owl_sandbox/assets/m2/README.md).
+With the GPU opt-in and validation environment above, both full CTest presets include the texture
+frame lifecycle test. A RenderDoc capture should contain one six-index draw with a sampled 64x64
+RGBA8 image at set 0, binding 0. Build/test success alone does not prove the final pixels.
 
 ## Image Upload and Readback Tests
 

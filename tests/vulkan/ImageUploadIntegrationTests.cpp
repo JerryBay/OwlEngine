@@ -1,6 +1,7 @@
 #include "GpuTestContext.h"
 #include "VulkanBuffer.h"
 #include "VulkanImageUpload.h"
+#include "VulkanMipChain.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <owl/foundation/Log.h>
@@ -138,7 +139,8 @@ namespace
     // Restores the upload's promised layout so another readback can use the same entry contract.
     bool ReadbackImage(const VulkanDevice& device, const VulkanAllocator& allocator,
                        const VulkanImage& image, std::span<std::byte> output,
-                       VkMemoryPropertyFlags& memoryProperties, std::string& error)
+                       VkMemoryPropertyFlags& memoryProperties, std::string& error,
+                       const std::uint32_t mipLevel = 0)
     {
         ReadbackResources resources;
         resources.device = device.Get();
@@ -189,7 +191,7 @@ namespace
             return false;
         const VkImageSubresourceRange range{
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
+            .baseMipLevel = mipLevel,
             .levelCount = 1,
             .baseArrayLayer = 0,
             .layerCount = 1,
@@ -198,7 +200,8 @@ namespace
         // and the previous layout transition, as well as any allowed fragment sampled reads.
         const VkImageMemoryBarrier2 toCopy{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT |
+                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
             .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -219,9 +222,10 @@ namespace
             .bufferOffset = 0,
             .bufferRowLength = 0,
             .bufferImageHeight = 0,
-            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mipLevel, 0, 1},
             .imageOffset = {0, 0, 0},
-            .imageExtent = {image.Desc().extent.width, image.Desc().extent.height, 1},
+            .imageExtent = {std::max(1U, image.Desc().extent.width >> mipLevel),
+                            std::max(1U, image.Desc().extent.height >> mipLevel), 1},
         };
         vkCmdCopyImageToBuffer(command, image.Get(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                resources.buffer->Get(), 1, &copy);
@@ -468,6 +472,40 @@ TEST_CASE("Vulkan image upload drains completion before transferring the destina
     CHECK(AllocationStatistics(*context->allocator).allocationBytes == baseline.allocationBytes);
 }
 
+TEST_CASE("Vulkan image upload accepts externally proven queue completion",
+          "[vulkan][image-upload][integration]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the image upload queue-idle test");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    const auto baseline = AllocationStatistics(*context->allocator);
+    {
+        const auto desc = UploadDesc({7, 3}, VK_FORMAT_R8G8B8A8_UNORM);
+        const auto pixels = Pixels(desc.extent, PixelPattern::Asymmetric);
+        auto upload = VulkanImageUpload::Create(
+            *context->device, *context->allocator, desc, pixels, error);
+        REQUIRE(upload);
+        UploadDrainGuard guard{*upload};
+        REQUIRE(upload->Submit(error) == VK_SUCCESS);
+        REQUIRE(upload->IsPending());
+        REQUIRE(vkQueueWaitIdle(context->device->GraphicsQueue()) == VK_SUCCESS);
+        upload->MarkCompleteAfterQueueIdleForDestruction();
+        CHECK_FALSE(upload->IsPending());
+        auto image = upload->TakeDestination(error);
+        REQUIRE(image);
+        std::vector<std::byte> actual(pixels.size());
+        VkMemoryPropertyFlags properties = 0;
+        REQUIRE(ReadbackImage(*context->device, *context->allocator, *image,
+                              actual, properties, error));
+        CHECK(actual == pixels);
+    }
+    CHECK(AllocationStatistics(*context->allocator).allocationCount == baseline.allocationCount);
+    CHECK(AllocationStatistics(*context->allocator).allocationBytes == baseline.allocationBytes);
+}
+
 TEST_CASE("Vulkan image upload rejects invalid requests without retaining allocations",
           "[vulkan][image-upload][integration]")
 {
@@ -497,7 +535,7 @@ TEST_CASE("Vulkan image upload rejects invalid requests without retaining alloca
     invalid.extent.width = 0;
     rejected(invalid, pixels);
     invalid = desc;
-    invalid.mipLevels = 2;
+    invalid.mipLevels = 4;
     rejected(invalid, pixels);
     invalid = desc;
     invalid.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -526,4 +564,139 @@ TEST_CASE("Vulkan image upload rejects invalid requests without retaining alloca
     }
     CHECK(AllocationStatistics(*context->allocator).allocationCount == baseline.allocationCount);
     CHECK(AllocationStatistics(*context->allocator).allocationBytes == baseline.allocationBytes);
+}
+
+TEST_CASE("CPU mip fallback uploads every level of an odd-sized image",
+          "[vulkan][mip][integration]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the mip upload test");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    const auto baseline = AllocationStatistics(*context->allocator);
+    {
+        auto desc = UploadDesc({7, 3}, VK_FORMAT_R8G8B8A8_SRGB);
+        desc.mipLevels = 3;
+        const auto pixels = Pixels(desc.extent, PixelPattern::Asymmetric);
+        const auto expected = detail::BuildCpuMipChain(desc, pixels, error);
+        REQUIRE(expected);
+        auto upload = VulkanImageUpload::Create(
+            *context->device, *context->allocator, desc, pixels, error,
+            MipGenerationMode::ForceCpu);
+        INFO(error);
+        REQUIRE(upload);
+        UploadDrainGuard guard{*upload};
+        REQUIRE(upload->Path() == MipUploadPath::CpuUpload);
+        REQUIRE(upload->Submit(error) == VK_SUCCESS);
+        REQUIRE(upload->Wait(error) == VK_SUCCESS);
+        auto image = upload->TakeDestination(error);
+        REQUIRE(image);
+        for (std::uint32_t level = 0; level < desc.mipLevels; ++level)
+        {
+            const auto& entry = expected->levels[level];
+            CAPTURE(level);
+            const auto size = static_cast<std::size_t>(entry.extent.width) * entry.extent.height * 4;
+            std::vector<std::byte> actual(size);
+            VkMemoryPropertyFlags properties = 0;
+            REQUIRE(ReadbackImage(*context->device, *context->allocator, *image,
+                                  actual, properties, error, level));
+            CHECK(std::equal(actual.begin(), actual.end(),
+                             expected->bytes.begin() + entry.offset));
+        }
+    }
+    CHECK(AllocationStatistics(*context->allocator).allocationCount == baseline.allocationCount);
+}
+
+TEST_CASE("Mip upload automatically falls back when transfer-source usage is absent",
+          "[vulkan][mip][integration]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the mip fallback test");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    auto desc = UploadDesc({2, 2}, VK_FORMAT_R8G8B8A8_UNORM);
+    desc.mipLevels = 2;
+    desc.usage &= ~VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    constexpr std::array<std::byte, 16> pixels{
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+        std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255},
+        std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+    auto upload = VulkanImageUpload::Create(*context->device, *context->allocator,
+                                            desc, pixels, error);
+    INFO(error);
+    REQUIRE(upload);
+    UploadDrainGuard guard{*upload};
+    CHECK(upload->Path() == MipUploadPath::CpuUpload);
+    REQUIRE(upload->Submit(error) == VK_SUCCESS);
+    REQUIRE(upload->Wait(error) == VK_SUCCESS);
+    auto image = upload->TakeDestination(error);
+    REQUIRE(image);
+    CHECK(image->Desc().mipLevels == 2);
+}
+
+TEST_CASE("GPU blit creates readable lower mips when the format supports linear blits",
+          "[vulkan][mip][integration]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the mip blit test");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(context->device->PhysicalDevice(),
+                                        VK_FORMAT_R8G8B8A8_UNORM, &properties);
+    constexpr auto required = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((properties.optimalTilingFeatures & required) != required)
+        SKIP("This device does not support linear RGBA8 blits");
+    const auto baseline = AllocationStatistics(*context->allocator);
+    {
+        auto desc = UploadDesc({4, 4}, VK_FORMAT_R8G8B8A8_UNORM);
+        desc.mipLevels = 3;
+        std::array<std::byte, 4 * 4 * 4> pixels{};
+        for (std::size_t y = 0; y < 4; ++y)
+        {
+            for (std::size_t x = 0; x < 4; ++x)
+            {
+                const auto offset = (y * 4 + x) * 4;
+                pixels[offset] = static_cast<std::byte>(x < 2 ? 0 : 255);
+                pixels[offset + 1] = std::byte{64};
+                pixels[offset + 2] = static_cast<std::byte>(y < 2 ? 0 : 255);
+                pixels[offset + 3] = std::byte{255};
+            }
+        }
+        auto upload = VulkanImageUpload::Create(
+            *context->device, *context->allocator, desc, pixels, error);
+        INFO(error);
+        REQUIRE(upload);
+        UploadDrainGuard guard{*upload};
+        REQUIRE(upload->Path() == MipUploadPath::GpuBlit);
+        REQUIRE(upload->Submit(error) == VK_SUCCESS);
+        REQUIRE(upload->Wait(error) == VK_SUCCESS);
+        auto image = upload->TakeDestination(error);
+        REQUIRE(image);
+        std::array<std::byte, 16> level1{};
+        VkMemoryPropertyFlags memory = 0;
+        REQUIRE(ReadbackImage(*context->device, *context->allocator, *image,
+                              level1, memory, error, 1));
+        CHECK(level1[0] == std::byte{0});
+        CHECK(level1[4] == std::byte{255});
+        CHECK(level1[8 + 2] == std::byte{255});
+        std::array<std::byte, 4> level2{};
+        REQUIRE(ReadbackImage(*context->device, *context->allocator, *image,
+                              level2, memory, error, 2));
+        const auto red = std::to_integer<unsigned int>(level2[0]);
+        const auto blue = std::to_integer<unsigned int>(level2[2]);
+        CHECK((red >= 127 && red <= 128));
+        CHECK(level2[1] == std::byte{64});
+        CHECK((blue >= 127 && blue <= 128));
+        CHECK(level2[3] == std::byte{255});
+    }
+    CHECK(AllocationStatistics(*context->allocator).allocationCount == baseline.allocationCount);
 }

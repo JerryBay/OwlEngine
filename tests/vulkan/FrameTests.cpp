@@ -74,9 +74,27 @@ TEST_CASE("Clear renderer rejects invalid windows and use after move", "[vulkan]
     CHECK(error.empty());
 }
 
+TEST_CASE("Renderer rejects simultaneous triangle and texture samples", "[vulkan][frame]")
+{
+    std::string error;
+    owl::platform::Window window;
+    owl::vulkan::VulkanTriangleOptions options;
+    options.triangleShaders = owl::vulkan::TriangleShaderPaths{};
+    options.textureShaders = owl::vulkan::TriangleShaderPaths{};
+    CHECK_FALSE(owl::vulkan::VulkanTriangle::Create(window, error, options));
+    CHECK(error.find("triangle and texture") != std::string::npos);
+}
+
 namespace
 {
-    void RunLocalFrames(const bool triangle)
+    enum class SampleMode
+    {
+        Clear,
+        Triangle,
+        Texture,
+    };
+
+    void RunLocalFrames(const SampleMode mode)
     {
         const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
         if (enabled == nullptr || std::string_view{enabled} != "1")
@@ -112,11 +130,17 @@ namespace
                                    error);
         REQUIRE(window);
         owl::vulkan::VulkanTriangleOptions options{.enablePresentFences = usePresentFences};
-        if (triangle)
+        if (mode == SampleMode::Triangle)
         {
             const std::filesystem::path assets{OWL_TRIANGLE_TEST_ASSET_DIR};
             options.triangleShaders = owl::vulkan::TriangleShaderPaths{
                 assets / "triangle.vert.spv", assets / "triangle.frag.spv"};
+        }
+        if (mode == SampleMode::Texture)
+        {
+            const std::filesystem::path assets{OWL_TEXTURE_TEST_ASSET_DIR};
+            options.textureShaders = owl::vulkan::TriangleShaderPaths{
+                assets / "texture.vert.spv", assets / "texture.frag.spv"};
         }
         auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error, options);
         INFO(error);
@@ -144,7 +168,7 @@ namespace
         };
         renderFrames(120);
         const auto initial = renderer->Stats();
-        REQUIRE(initial.indexedDraws == (triangle ? initial.submittedFrames : 0));
+        REQUIRE(initial.indexedDraws == (mode != SampleMode::Clear ? initial.submittedFrames : 0));
         owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
         CHECK_FALSE(renderer->IsValid());
         CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Failed);
@@ -179,7 +203,8 @@ namespace
         REQUIRE(renderer->WaitIdle(error));
         CHECK(renderer->Stats().submittedFrames >= renderer->Stats().presentedFrames);
         CHECK(renderer->Stats().presentedFrames > initial.presentedFrames);
-        CHECK(renderer->Stats().indexedDraws == (triangle ? renderer->Stats().submittedFrames : 0));
+        CHECK(renderer->Stats().indexedDraws ==
+              (mode != SampleMode::Clear ? renderer->Stats().submittedFrames : 0));
         renderer.reset();
         CHECK(window->IsValid());
     }
@@ -187,10 +212,15 @@ namespace
 
 TEST_CASE("Vulkan clear frames resize and recover locally", "[vulkan][integration][frame]")
 {
-    RunLocalFrames(false);
+    RunLocalFrames(SampleMode::Clear);
 }
 
 TEST_CASE("Vulkan triangle frames resize and recover locally", "[vulkan][integration][triangle]")
 {
-    RunLocalFrames(true);
+    RunLocalFrames(SampleMode::Triangle);
+}
+
+TEST_CASE("Vulkan texture frames resize and recover locally", "[vulkan][integration][texture]")
+{
+    RunLocalFrames(SampleMode::Texture);
 }

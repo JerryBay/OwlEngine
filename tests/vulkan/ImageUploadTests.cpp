@@ -68,6 +68,38 @@ TEST_CASE("Image upload completion policy retains unresolved work", "[vulkan][im
     CHECK(StateAfterImageUploadWait(State::DeviceLost, VK_SUCCESS) == State::DeviceLost);
 }
 
+TEST_CASE("Mip upload chooses GPU blit only with all required format features and usage",
+          "[vulkan][mip]")
+{
+    auto desc = Desc;
+    desc.mipLevels = 3;
+    desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    constexpr auto features = VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+                              VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    CHECK(detail::ChooseMipUploadPath(desc, features, MipGenerationMode::Auto) ==
+          MipUploadPath::GpuBlit);
+    CHECK(detail::ChooseMipUploadPath(desc, features, MipGenerationMode::ForceCpu) ==
+          MipUploadPath::CpuUpload);
+    CHECK(detail::ChooseMipUploadPath(desc, features & ~VK_FORMAT_FEATURE_BLIT_SRC_BIT,
+                                      MipGenerationMode::Auto) == MipUploadPath::CpuUpload);
+    CHECK(detail::ChooseMipUploadPath(desc, features & ~VK_FORMAT_FEATURE_BLIT_DST_BIT,
+                                      MipGenerationMode::Auto) == MipUploadPath::CpuUpload);
+    CHECK(detail::ChooseMipUploadPath(desc,
+                                      features & ~VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT,
+                                      MipGenerationMode::Auto) == MipUploadPath::CpuUpload);
+    desc.usage &= ~VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    CHECK(detail::ChooseMipUploadPath(desc, features, MipGenerationMode::Auto) ==
+          MipUploadPath::CpuUpload);
+    desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    desc.extent.width = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) + 1U;
+    CHECK(detail::ChooseMipUploadPath(desc, features, MipGenerationMode::Auto) ==
+          MipUploadPath::CpuUpload);
+    desc.mipLevels = 1;
+    CHECK(detail::ChooseMipUploadPath(desc, features, MipGenerationMode::Auto) ==
+          MipUploadPath::SingleLevel);
+}
+
 TEST_CASE("Image upload empty owners reject submission and handoff", "[vulkan][image-upload]")
 {
     VulkanDevice device;

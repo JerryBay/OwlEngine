@@ -27,8 +27,12 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanImageUpload.h
     src/VulkanImageView.cpp
     src/VulkanImageView.h
+    src/VulkanMipChain.cpp
+    src/VulkanMipChain.h
     src/VulkanSampler.cpp
     src/VulkanSampler.h
+    src/VulkanShaderBinary.cpp
+    src/VulkanShaderBinary.h
     src/VulkanPresentationSupport.h
     src/VulkanSurface.cpp
     src/VulkanSurface.h
@@ -37,6 +41,8 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanTriangle.cpp
     src/VulkanTrianglePipeline.cpp
     src/VulkanTrianglePipeline.h
+    src/VulkanTexturedQuadPipeline.cpp
+    src/VulkanTexturedQuadPipeline.h
 )
 
 target_include_directories(OwlVulkan

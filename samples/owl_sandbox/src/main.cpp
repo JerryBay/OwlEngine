@@ -1,5 +1,6 @@
 #include "ClearSample.h"
 #include "SmokeSample.h"
+#include "TextureSample.h"
 #include "TriangleSample.h"
 
 #include <owl/foundation/CommandLine.h>
@@ -17,7 +18,8 @@ namespace
                   << "  --help             Show this help\n"
                   << "  --sample smoke     Run the M0 SDL3 smoke sample\n"
                   << "  --sample clear     Run the M1 Vulkan clear sample\n"
-                  << "  --sample triangle  Run the M1 Vulkan triangle sample\n";
+                  << "  --sample triangle  Run the M1 Vulkan triangle sample\n"
+                  << "  --sample texture   Run the M2 Vulkan textured quad sample\n";
     }
 } // namespace
 
@@ -44,6 +46,8 @@ int main(const int argc, char* argv[])
         return owl::sandbox::RunClearSample();
     case owl::foundation::Command::Triangle:
         return owl::sandbox::RunTriangleSample();
+    case owl::foundation::Command::Texture:
+        return owl::sandbox::RunTextureSample();
     case owl::foundation::Command::Invalid:
         std::cerr << "Error: " << parsed.error << "\n"
                   << "Run OwlSandbox --help for usage.\n";

@@ -1,14 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "VulkanTrianglePipeline.h"
+#include "VulkanShaderBinary.h"
 
 #include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 
-TEST_CASE("Triangle SPIR-V loading rejects missing truncated and invalid binaries",
-          "[vulkan][triangle]")
+TEST_CASE("Sample SPIR-V loading rejects missing truncated and invalid binaries",
+          "[vulkan][shader]")
 {
     struct Fixture
     {
@@ -27,9 +27,9 @@ TEST_CASE("Triangle SPIR-V loading rejects missing truncated and invalid binarie
         }
     } fixture;
     const auto path = fixture.directory / "test.spv";
-    using owl::vulkan::detail::ReadTriangleSpirv;
+    using owl::vulkan::detail::ReadSampleSpirv;
     std::string error;
-    CHECK_FALSE(ReadTriangleSpirv(path, error));
+    CHECK_FALSE(ReadSampleSpirv(path, error));
     CHECK_FALSE(error.empty());
 
     // A minimal envelope fixture; the loader is deliberately not a semantic SPIR-V validator.
@@ -41,20 +41,20 @@ TEST_CASE("Triangle SPIR-V loading rejects missing truncated and invalid binarie
                    static_cast<std::streamsize>(count));
     };
     write(sizeof(header));
-    const auto loaded = ReadTriangleSpirv(path, error);
+    const auto loaded = ReadSampleSpirv(path, error);
     REQUIRE(loaded);
     CHECK(loaded->size() == 5);
     CHECK((*loaded)[0] == 0x07230203);
     CHECK(error.empty());
     write(0);
-    CHECK_FALSE(ReadTriangleSpirv(path, error));
+    CHECK_FALSE(ReadSampleSpirv(path, error));
     write(sizeof(header) - 1);
-    CHECK_FALSE(ReadTriangleSpirv(path, error));
+    CHECK_FALSE(ReadSampleSpirv(path, error));
     {
         std::ofstream file{path, std::ios::binary | std::ios::trunc};
         const std::array<char, 20> zeros{};
         file.write(zeros.data(), zeros.size());
     }
-    CHECK_FALSE(ReadTriangleSpirv(path, error));
+    CHECK_FALSE(ReadSampleSpirv(path, error));
     CHECK_FALSE(error.empty());
 }

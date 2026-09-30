@@ -89,6 +89,15 @@ LOD 规则，可以用于多个兼容图像，不拥有 Image 或 ImageView。�
 [ImageView](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewCreateInfo.html) 和
 [Sampler](https://docs.vulkan.org/refpages/latest/refpages/source/VkSamplerCreateInfo.html)。
 
+生成 mip 时，`vkCmdBlitImage` 需要源 mip 具备 `TRANSFER_SRC`、目标 mip 具备 `TRANSFER_DST`，
+并且格式的 optimal-tiling features 同时支持 blit source、blit destination 和线性过滤。
+每一层都要单独跟踪布局：上一层先转为 `TRANSFER_SRC_OPTIMAL`，目标层转为
+`TRANSFER_DST_OPTIMAL`，blit 后再把已完成的源层转为 shader-read；最后一层也必须完成
+同样的收尾转换。缺少能力时不能把未初始化的 mip 当成成功结果，CPU 生成链是明确的后备路径。
+CPU 盒式过滤若直接平均 sRGB 字节会使中间色偏暗；RGB 应先解码到线性空间再平均并编码，
+alpha 则直接在线性空间平均。GPU blit 与 CPU 参考值可能因实现的过滤细节略有差异，精确
+逐字节验收应针对 CPU 路径，GPU 路径验证能力选择、同步、布局和非零输出。
+
 ### Buffer 与 Image 之间的像素传输
 
 CPU 像素通常按行连续排列，optimal-tiling Image 的内部存储则由驱动安排。`vkCmdCopyBufferToImage`
@@ -110,6 +119,13 @@ Shader 描述可编程阶段的计算；Graphics Pipeline 把 Shader 与顶点�
 Pipeline Layout 描述 Descriptor Set 和 Push Constant 的接口布局，不是顶点布局，也不是实际资源的容器。
 动态状态允许部分值在命令录制时指定；例如动态 Viewport/Scissor 可以减少窗口尺寸变化导致的管线重建。
 Dynamic Rendering 省去传统 Render Pass/Framebuffer 对象的创建需求，但没有消除附件格式兼容性和同步要求。
+
+Descriptor Set Layout 声明 Shader 可访问的绑定槽、资源类型、数量和阶段；Descriptor Pool 提供分配容量，
+Descriptor Set 保存一次具体绑定。对纹理采样，`combined image sampler` 把 ImageView 与 Sampler 一起写进
+Descriptor Set。它们仍是独立对象，Set 不拥有 Image 或 View。Pipeline Layout 引用 Set Layout，
+因此 Shader 声明、Set Layout、实际写入和绘制时绑定的 Set 必须相容。Descriptor 中声明的 Image Layout
+还必须与采样时 Image 的真实布局一致；填入 `SHADER_READ_ONLY_OPTIMAL` 不能代替上传后的布局转换和内存依赖。
+GPU 仍在使用某个 Set 时，不能随意改写它引用的描述符或销毁其资源；需要等待完成或使用明确允许的更新机制。
 
 继续深入：哪些状态适合固定在 Pipeline 中，哪些适合动态设置；Shader 资源接口如何与实际绑定的资源衔接。
 

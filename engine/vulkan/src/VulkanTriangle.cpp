@@ -7,6 +7,7 @@
 #include "VulkanInstance.h"
 #include "VulkanSurface.h"
 #include "VulkanSwapchain.h"
+#include "VulkanTexturedQuadPipeline.h"
 #include "VulkanTrianglePipeline.h"
 
 #include <SDL3/SDL_video.h>
@@ -22,6 +23,13 @@ namespace owl::vulkan
 {
     struct VulkanTriangle::Impl
     {
+        enum class SampleMode
+        {
+            Clear,
+            Triangle,
+            Texture,
+        };
+
         owl::platform::Window* window = nullptr;
         VulkanInstance instance;
         VulkanSurface surface;
@@ -30,7 +38,8 @@ namespace owl::vulkan
         VulkanSwapchain swapchain;
         VulkanFrameResources frames;
         VulkanTrianglePipeline triangle;
-        bool drawTriangle = false;
+        VulkanTexturedQuadPipeline texture;
+        SampleMode mode = SampleMode::Clear;
         VulkanTriangleStats stats;
         VkExtent2D lastRequestedExtent{};
         std::size_t frameIndex = 0;
@@ -69,12 +78,14 @@ namespace owl::vulkan
         DestructionDrain DrainForDestructionNoexcept() noexcept
         {
             if (!device.IsValid())
-                return triangle.DrainUploadForDestruction() == VK_SUCCESS
+                return triangle.DrainUploadForDestruction() == VK_SUCCESS &&
+                               texture.DrainUploadForDestruction() == VK_SUCCESS
                            ? DestructionDrain::Complete
                            : DestructionDrain::Unresolved;
             if (deviceLost)
             {
                 triangle.MarkUploadDeviceLostForDestruction();
+                texture.MarkUploadDeviceLostForDestruction();
                 return DestructionDrain::DeviceLost;
             }
 
@@ -84,6 +95,7 @@ namespace owl::vulkan
                 {
                     deviceLost = true;
                     triangle.MarkUploadDeviceLostForDestruction();
+                    texture.MarkUploadDeviceLostForDestruction();
                     return DestructionDrain::DeviceLost;
                 }
                 return result == VK_SUCCESS ? DestructionDrain::Complete
@@ -92,6 +104,12 @@ namespace owl::vulkan
 
             bool unresolved = false;
             if (const auto result = triangle.DrainUploadForDestruction(); result != VK_SUCCESS)
+            {
+                if (classify(result) == DestructionDrain::DeviceLost)
+                    return DestructionDrain::DeviceLost;
+                unresolved = true;
+            }
+            if (const auto result = texture.DrainUploadForDestruction(); result != VK_SUCCESS)
             {
                 if (classify(result) == DestructionDrain::DeviceLost)
                     return DestructionDrain::DeviceLost;
@@ -145,6 +163,7 @@ namespace owl::vulkan
             // Device idle proves graphics submissions, including the startup copy and draw
             // submissions. Acquire and present fences still need their own WSI completion proof.
             triangle.MarkUploadCompleteAfterQueueIdleForDestruction();
+            texture.MarkUploadCompleteAfterQueueIdleForDestruction();
             for (auto& slot : frames.slots)
             {
                 slot.submissionPending = false;
@@ -229,7 +248,9 @@ namespace owl::vulkan
                 error = failure;
                 return false;
             }
-            const auto uploadResult = triangle.WaitForUpload(error);
+            auto uploadResult = triangle.WaitForUpload(error);
+            if (uploadResult == VK_SUCCESS)
+                uploadResult = texture.WaitForUpload(error);
             if (uploadResult != VK_SUCCESS)
             {
                 failed = true;
@@ -275,7 +296,15 @@ namespace owl::vulkan
                 return result;
             }
             // Deferred/preflight failure preserves the old chain and its matching sync objects.
-            if (drawTriangle && !triangle.SetColorFormat(swapchain.SurfaceFormat().format, error))
+            if (mode == SampleMode::Triangle &&
+                !triangle.SetColorFormat(swapchain.SurfaceFormat().format, error))
+            {
+                failed = true;
+                failure = error;
+                return SwapchainUpdateResult::Failed;
+            }
+            if (mode == SampleMode::Texture &&
+                !texture.SetColorFormat(swapchain.SurfaceFormat().format, error))
             {
                 failed = true;
                 failure = error;
@@ -347,8 +376,10 @@ namespace owl::vulkan
                 .pColorAttachments = &attachment,
             };
             vkCmdBeginRendering(slot.commandBuffer, &rendering);
-            if (drawTriangle)
+            if (mode == SampleMode::Triangle)
                 triangle.RecordDraw(slot.commandBuffer, swapchain.Extent());
+            else if (mode == SampleMode::Texture)
+                texture.RecordDraw(slot.commandBuffer, swapchain.Extent());
             vkCmdEndRendering(slot.commandBuffer);
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -454,7 +485,7 @@ namespace owl::vulkan
                 return FrameResult::Failed;
             slot.submissionPending = true;
             ++stats.submittedFrames;
-            if (drawTriangle)
+            if (mode != SampleMode::Clear)
                 ++stats.indexedDraws;
 
             const VkSwapchainKHR chain = swapchain.Get();
@@ -497,6 +528,11 @@ namespace owl::vulkan
                                                          std::string& error,
                                                          const VulkanTriangleOptions options)
     {
+        if (options.triangleShaders && options.textureShaders)
+        {
+            error = "Cannot select triangle and texture samples simultaneously";
+            return std::nullopt;
+        }
         SDL_Window* native = owl::platform::SDLWindowAccess::Get(window);
         if (!window.IsValid() || native == nullptr ||
             (SDL_GetWindowFlags(native) & SDL_WINDOW_VULKAN) == 0)
@@ -525,16 +561,26 @@ namespace owl::vulkan
         if (!device)
             return std::nullopt;
         impl->device = std::move(*device);
-        if (options.triangleShaders)
+        if (options.triangleShaders || options.textureShaders)
         {
             auto allocator = VulkanAllocator::Create(impl->instance.Get(), impl->device, error);
             if (!allocator)
                 return std::nullopt;
             impl->allocator = std::move(*allocator);
-            if (!impl->triangle.Initialize(impl->device, impl->allocator,
-                                           *options.triangleShaders, error))
-                return std::nullopt;
-            impl->drawTriangle = true;
+            if (options.triangleShaders)
+            {
+                if (!impl->triangle.Initialize(impl->device, impl->allocator,
+                                               *options.triangleShaders, error))
+                    return std::nullopt;
+                impl->mode = Impl::SampleMode::Triangle;
+            }
+            else
+            {
+                if (!impl->texture.Initialize(impl->device, impl->allocator,
+                                              *options.textureShaders, error))
+                    return std::nullopt;
+                impl->mode = Impl::SampleMode::Texture;
+            }
         }
         if (!impl->frames.Initialize(impl->device.Get(),
                                      *impl->device.QueueFamilies().graphicsFamily, error))

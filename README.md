@@ -29,11 +29,14 @@ See [M1 acceptance](docs/learning/m1-vulkan-bootstrap.md) for verification scope
 M2 is in implementation. The native M2A exercise established buffer ownership, staging uploads,
 exact GPU readback, and device-local triangle geometry. M2B-1 now uses pinned VMA 3.4.0 for
 allocation, with explicit host-access intent and unchanged upload synchronization. M2B-2 provides
-private Image/ImageView/Sampler owners plus single-mip RGBA8 uploads, explicit layout transitions,
-and exact image readback. Both local VS2026 configurations pass 92/92 tests with synchronization
-validation. Texture sampling draws and mip generation remain next. See the
+private Image/ImageView/Sampler owners, single-mip RGBA8 uploads, exact image readback, and a
+textured indexed-quad sample with one combined image sampler. The M2B-2 checkpoint passed 99/99
+tests in both VS2026 configurations; a RenderDoc capture confirms sampled output.
+M2B-3 adds capability-gated GPU mip blits and a CPU linear-light fallback, with per-level
+readback tests. Both VS2026 configurations now pass 106/106 opt-in tests. The visual sample still
+uses one mip; frame-local uploads remain next. See the
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
-[image upload plan](docs/superpowers/plans/2026-09-29-owlengine-m2b-image-upload.md), and
+[textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
 
 ## Build, Test, and Run on Windows
@@ -56,6 +59,9 @@ ctest --preset windows-vs2022-debug
 
 # Run the indexed triangle with deployed precompiled shaders.
 ./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample triangle
+
+# Run the textured checkerboard quad.
+./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample texture
 ```
 
 See [Windows build instructions](docs/building/windows.md) for prerequisites, clean reconfigure,

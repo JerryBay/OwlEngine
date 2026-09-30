@@ -13,7 +13,7 @@ namespace owl::sandbox
     namespace
     {
         int RunVulkanWindow(const std::string_view name,
-                            std::optional<owl::vulkan::TriangleShaderPaths> shaderAssets)
+                            owl::vulkan::VulkanTriangleOptions options)
         {
             using owl::foundation::LogLevel;
             using owl::foundation::LogMessage;
@@ -26,8 +26,7 @@ namespace owl::sandbox
                 return 3;
             }
 
-            owl::vulkan::VulkanTriangleOptions options;
-            if (shaderAssets)
+            if (options.triangleShaders || options.textureShaders)
             {
                 const auto executableDirectory =
                     owl::platform::Platform::ExecutableDirectory(error);
@@ -37,13 +36,19 @@ namespace owl::sandbox
                     return 3;
                 }
 
-                shaderAssets->vertex = *executableDirectory / shaderAssets->vertex;
-                shaderAssets->fragment = *executableDirectory / shaderAssets->fragment;
-                options.triangleShaders = std::move(shaderAssets);
+                const auto resolve = [&](owl::vulkan::TriangleShaderPaths& shaders)
+                {
+                    shaders.vertex = *executableDirectory / shaders.vertex;
+                    shaders.fragment = *executableDirectory / shaders.fragment;
+                };
+                if (options.triangleShaders)
+                    resolve(*options.triangleShaders);
+                if (options.textureShaders)
+                    resolve(*options.textureShaders);
             }
 
             const owl::platform::WindowDesc windowDesc{
-                .title = "OwlEngine - M1 Vulkan " + std::string{name},
+                .title = "OwlEngine - Vulkan " + std::string{name},
                 .width = 1280,
                 .height = 720,
                 .resizable = true,
@@ -95,10 +100,10 @@ namespace owl::sandbox
     } // namespace
 
     int RunVulkanSample(const std::string_view name,
-                        std::optional<owl::vulkan::TriangleShaderPaths> shaderAssets)
+                        owl::vulkan::VulkanTriangleOptions options)
     {
         owl::foundation::InitializeLogging();
-        const int result = RunVulkanWindow(name, std::move(shaderAssets));
+        const int result = RunVulkanWindow(name, std::move(options));
         if (result == 0)
         {
             owl::foundation::LogMessage(owl::foundation::LogLevel::Info, name,

@@ -23,9 +23,11 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/ImageResourceTests.cpp
     vulkan/ImageUploadTests.cpp
     vulkan/ImageUploadIntegrationTests.cpp
+    vulkan/MipChainTests.cpp
     vulkan/GpuTestContext.cpp
     vulkan/GpuTestContext.h
     vulkan/SwapchainTests.cpp
+    vulkan/TexturePipelineTests.cpp
     vulkan/TrianglePipelineTests.cpp
     vulkan/VulkanBootstrapTests.cpp
 )
@@ -59,6 +61,7 @@ target_link_libraries(OwlUnitTests PRIVATE
 owl_enable_warnings(OwlUnitTests)
 target_compile_definitions(OwlUnitTests PRIVATE
     OWL_TRIANGLE_TEST_ASSET_DIR="${PROJECT_SOURCE_DIR}/samples/owl_sandbox/assets/m1"
+    OWL_TEXTURE_TEST_ASSET_DIR="${PROJECT_SOURCE_DIR}/samples/owl_sandbox/assets/m2"
 )
 # Keep discovered executable paths separate for each Visual Studio configuration.
 # Validation callbacks log errors without failing Catch2 assertions; CTest must reject them.

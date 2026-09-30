@@ -2,8 +2,10 @@
 
 #include "VulkanAllocator.h"
 #include "VulkanDevice.h"
+#include "VulkanMipChain.h"
 
 #include <exception>
+#include <algorithm>
 #include <utility>
 
 namespace owl::vulkan::detail
@@ -22,6 +24,24 @@ namespace owl::vulkan::detail
         if (height > limit / rowBytes)
             return std::nullopt;
         return rowBytes * height;
+    }
+
+    MipUploadPath ChooseMipUploadPath(const VulkanImageDesc& desc,
+                                     const VkFormatFeatureFlags optimalFeatures,
+                                     const MipGenerationMode mode) noexcept
+    {
+        if (desc.mipLevels == 1)
+            return MipUploadPath::SingleLevel;
+        constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+                                                  VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if (mode == MipGenerationMode::Auto &&
+            (desc.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0 &&
+            desc.extent.width <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) &&
+            desc.extent.height <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) &&
+            (optimalFeatures & required) == required)
+            return MipUploadPath::GpuBlit;
+        return MipUploadPath::CpuUpload;
     }
 
     ImageUploadState StateAfterImageUploadSubmit(const ImageUploadState state,
@@ -77,6 +97,7 @@ namespace owl::vulkan
           staging_(std::exchange(other.staging_, std::nullopt)),
           destination_(std::exchange(other.destination_, std::nullopt)),
           stagingMemoryProperties_(std::exchange(other.stagingMemoryProperties_, 0)),
+          path_(std::exchange(other.path_, MipUploadPath::SingleLevel)),
           state_(std::exchange(other.state_, detail::ImageUploadState::NotSubmitted))
     {
     }
@@ -94,6 +115,7 @@ namespace owl::vulkan
             staging_ = std::exchange(other.staging_, std::nullopt);
             destination_ = std::exchange(other.destination_, std::nullopt);
             stagingMemoryProperties_ = std::exchange(other.stagingMemoryProperties_, 0);
+            path_ = std::exchange(other.path_, MipUploadPath::SingleLevel);
             state_ = std::exchange(other.state_, detail::ImageUploadState::NotSubmitted);
         }
         return *this;
@@ -101,7 +123,8 @@ namespace owl::vulkan
 
     std::optional<VulkanImageUpload> VulkanImageUpload::Create(
         const VulkanDevice& device, const VulkanAllocator& allocator, const VulkanImageDesc& desc,
-        const std::span<const std::byte> bytes, std::string& error)
+        const std::span<const std::byte> bytes, std::string& error,
+        const MipGenerationMode mode)
     {
         if (!device.IsValid() || device.GraphicsQueue() == VK_NULL_HANDLE ||
             !device.QueueFamilies().graphicsFamily)
@@ -114,30 +137,46 @@ namespace owl::vulkan
             error = "Image upload requires an allocator belonging to its device";
             return std::nullopt;
         }
-        const auto byteSize = detail::ImageUploadByteSize(desc);
-        if (!byteSize || bytes.size() != *byteSize)
+        auto baseDesc = desc;
+        baseDesc.mipLevels = 1;
+        const auto byteSize = detail::ImageUploadByteSize(baseDesc);
+        if (!detail::IsImageDescValid(desc) || !byteSize || bytes.size() != *byteSize)
         {
-            error = "Image upload requires a single-mip sampled RGBA8 transfer destination "
+            error = "Image upload requires a sampled RGBA8 transfer destination "
                     "and exactly width * height * 4 bytes";
             return std::nullopt;
+        }
+
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(device.PhysicalDevice(), desc.format, &properties);
+        const auto path = detail::ChooseMipUploadPath(desc, properties.optimalTilingFeatures, mode);
+        std::optional<detail::CpuMipChain> chain;
+        std::span<const std::byte> stagingBytes = bytes;
+        if (path == MipUploadPath::CpuUpload)
+        {
+            chain = detail::BuildCpuMipChain(desc, bytes, error);
+            if (!chain)
+                return std::nullopt;
+            stagingBytes = chain->bytes;
         }
 
         VulkanImageUpload result;
         result.device_ = device.Get();
         result.queue_ = device.GraphicsQueue();
+        result.path_ = path;
         // Query format/extent support before allocating the staging payload.
         result.destination_ = VulkanImage::Create(allocator, desc, error);
         if (!result.destination_)
             return std::nullopt;
         const VulkanBufferDesc stagingDesc{
-            .size = *byteSize,
+            .size = stagingBytes.size(),
             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
             .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             .hostAccess = BufferHostAccess::SequentialWrite,
         };
         result.staging_ = VulkanBuffer::Create(allocator, stagingDesc, error);
-        if (!result.staging_ || !result.staging_->Write(0, bytes, error))
+        if (!result.staging_ || !result.staging_->Write(0, stagingBytes, error))
             return std::nullopt;
         result.stagingMemoryProperties_ = result.staging_->MemoryProperties();
 
@@ -171,63 +210,109 @@ namespace owl::vulkan
                    "vkBeginCommandBuffer(image upload)", error))
             return std::nullopt;
 
-        const VkImageSubresourceRange range{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
+        const auto transition = [&](const std::uint32_t level, const std::uint32_t count,
+                                    const VkImageLayout oldLayout, const VkImageLayout newLayout,
+                                    const VkPipelineStageFlags2 srcStage, const VkAccessFlags2 srcAccess,
+                                    const VkPipelineStageFlags2 dstStage, const VkAccessFlags2 dstAccess)
+        {
+            const VkImageMemoryBarrier2 barrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .srcStageMask = srcStage,
+                .srcAccessMask = srcAccess,
+                .dstStageMask = dstStage,
+                .dstAccessMask = dstAccess,
+                .oldLayout = oldLayout,
+                .newLayout = newLayout,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = result.destination_->Get(),
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, count, 0, 1},
+            };
+            const VkDependencyInfo dependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &barrier,
+            };
+            vkCmdPipelineBarrier2(command, &dependency);
         };
-        // This owner always creates a new image, so there is no previous image access to wait for.
-        // Host writes are flushed by staging.Write before submission's host-to-device operation.
-        const VkImageMemoryBarrier2 toCopy{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = VK_ACCESS_2_NONE,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
-            .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = result.destination_->Get(),
-            .subresourceRange = range,
+        const auto copy = [&](const std::uint32_t level, const VkExtent2D extent,
+                              const VkDeviceSize offset)
+        {
+            const VkBufferImageCopy region{
+                .bufferOffset = offset,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1},
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {extent.width, extent.height, 1},
+            };
+            vkCmdCopyBufferToImage(command, result.staging_->Get(), result.destination_->Get(),
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         };
-        const VkDependencyInfo beforeCopy{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &toCopy,
-        };
-        vkCmdPipelineBarrier2(command, &beforeCopy);
-        const VkBufferImageCopy region{
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-            .imageOffset = {0, 0, 0},
-            .imageExtent = {desc.extent.width, desc.extent.height, 1},
-        };
-        vkCmdCopyBufferToImage(command, result.staging_->Get(), result.destination_->Get(),
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        const VkImageMemoryBarrier2 toSampling{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
-            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = result.destination_->Get(),
-            .subresourceRange = range,
-        };
-        const VkDependencyInfo afterCopy{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &toSampling,
-        };
-        vkCmdPipelineBarrier2(command, &afterCopy);
+        transition(0, path == MipUploadPath::CpuUpload ? desc.mipLevels : 1,
+                   VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                   VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT,
+                   VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        copy(0, desc.extent, 0);
+        if (path == MipUploadPath::CpuUpload)
+        {
+            for (std::uint32_t level = 1; level < desc.mipLevels; ++level)
+                copy(level, chain->levels[level].extent, chain->levels[level].offset);
+            transition(0, desc.mipLevels, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+        else if (path == MipUploadPath::GpuBlit)
+        {
+            VkExtent2D source = desc.extent;
+            for (std::uint32_t level = 1; level < desc.mipLevels; ++level)
+            {
+                const VkExtent2D target{
+                    std::max(1U, source.width / 2), std::max(1U, source.height / 2)};
+                transition(level - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           level == 1 ? VK_PIPELINE_STAGE_2_COPY_BIT : VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT);
+                transition(level, 1, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                const VkImageBlit region{
+                    .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1},
+                    .srcOffsets = {{0, 0, 0}, {static_cast<std::int32_t>(source.width),
+                                              static_cast<std::int32_t>(source.height), 1}},
+                    .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1},
+                    .dstOffsets = {{0, 0, 0}, {static_cast<std::int32_t>(target.width),
+                                              static_cast<std::int32_t>(target.height), 1}},
+                };
+                vkCmdBlitImage(command, result.destination_->Get(),
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, result.destination_->Get(),
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+                transition(level - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                source = target;
+            }
+            transition(desc.mipLevels - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+        else
+        {
+            transition(0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
         if (!Check(vkEndCommandBuffer(command), "vkEndCommandBuffer(image upload)", error))
             return std::nullopt;
         const VkFenceCreateInfo fenceInfo{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -313,10 +398,24 @@ namespace owl::vulkan
         return result;
     }
 
+    void VulkanImageUpload::MarkCompleteAfterQueueIdleForDestruction() noexcept
+    {
+        if (IsPending())
+            ObserveWaitResult(VK_SUCCESS);
+    }
+
+    void VulkanImageUpload::MarkDeviceLostForDestruction() noexcept
+    {
+        if (IsPending())
+            state_ = detail::ImageUploadState::DeviceLost;
+    }
+
     VkMemoryPropertyFlags VulkanImageUpload::StagingMemoryProperties() const noexcept
     {
         return stagingMemoryProperties_;
     }
+
+    MipUploadPath VulkanImageUpload::Path() const noexcept { return path_; }
 
     std::optional<VulkanImage> VulkanImageUpload::TakeDestination(std::string& error)
     {
@@ -361,6 +460,7 @@ namespace owl::vulkan
         device_ = VK_NULL_HANDLE;
         queue_ = VK_NULL_HANDLE;
         stagingMemoryProperties_ = 0;
+        path_ = MipUploadPath::SingleLevel;
         state_ = detail::ImageUploadState::NotSubmitted;
     }
 } // namespace owl::vulkan

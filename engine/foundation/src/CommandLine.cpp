@@ -37,6 +37,11 @@ namespace owl::foundation
             return ParsedCommandLine{.command = Command::Triangle};
         }
 
+        if (arguments.size() == 2 && arguments[0] == "--sample" && arguments[1] == "texture")
+        {
+            return ParsedCommandLine{.command = Command::Texture};
+        }
+
         return ParsedCommandLine{
             .command = Command::Invalid,
             .error = "unknown command line",

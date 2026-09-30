@@ -12,6 +12,7 @@ namespace owl::foundation
         Smoke,
         Clear,
         Triangle,
+        Texture,
         Invalid,
     };
 

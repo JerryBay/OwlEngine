@@ -32,6 +32,8 @@ namespace owl::vulkan
         bool enablePresentFences = true;
         // Absent keeps the original clear-only path. Shader bytes are loaded during Create.
         std::optional<TriangleShaderPaths> triangleShaders;
+        // Selects the textured quad sample instead. Mutually exclusive with triangleShaders.
+        std::optional<TriangleShaderPaths> textureShaders;
     };
 
     struct VulkanTriangleStats
@@ -46,7 +48,7 @@ namespace owl::vulkan
         bool validationEnabled = false;
     };
 
-    // M1 sample lifecycle. Clears, then optionally draws the configured indexed triangle.
+    // Sample lifecycle. Clears, then optionally draws one configured indexed sample.
     // Window must remain alive and unmoved. All calls and destruction are single-threaded
     // on the window thread. The caller pumps events and throttles Deferred frames.
     // Destruction/move replacement waits for owned work; use WaitIdle for error reporting.
