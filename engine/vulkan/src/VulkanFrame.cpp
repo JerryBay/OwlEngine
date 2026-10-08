@@ -2,10 +2,21 @@
 
 #include <owl/foundation/Log.h>
 
+#include <algorithm>
+#include <exception>
+#include <limits>
+
 namespace owl::vulkan
 {
     namespace detail
     {
+        std::optional<std::uint64_t> NextSubmissionSerial(const std::uint64_t submitted) noexcept
+        {
+            if (submitted == std::numeric_limits<std::uint64_t>::max())
+                return std::nullopt;
+            return submitted + 1;
+        }
+
         AcquireAction ClassifyAcquireResult(const VkResult result) noexcept
         {
             switch (result)
@@ -41,6 +52,47 @@ namespace owl::vulkan
             }
         }
     } // namespace detail
+
+    bool VulkanSubmissionProgress::CanSubmit(const VulkanFrameSlot& slot) const noexcept
+    {
+        return !slot.submissionPending && detail::NextSubmissionSerial(submitted_).has_value();
+    }
+
+    void VulkanSubmissionProgress::RecordSubmitResult(VulkanFrameSlot& slot,
+                                                      const VkResult result) noexcept
+    {
+        if (result != VK_SUCCESS)
+            return;
+        // The caller preflights before native submission. Losing a successful submit's
+        // identity would make future reuse/destruction unsafe, so misuse is terminal.
+        if (!CanSubmit(slot))
+            std::terminate();
+        slot.submissionSerial = *detail::NextSubmissionSerial(submitted_);
+        submitted_ = slot.submissionSerial;
+        slot.submissionPending = true;
+    }
+
+    void VulkanSubmissionProgress::RecordWaitResult(VulkanFrameSlot& slot,
+                                                    const VkResult result) noexcept
+    {
+        if (result != VK_SUCCESS || !slot.submissionPending)
+            return;
+        if (slot.submissionSerial == 0 || slot.submissionSerial > submitted_)
+            std::terminate();
+        // The fence signal covers earlier submissions on this same graphics queue.
+        completed_ = std::max(completed_, slot.submissionSerial);
+        slot.submissionPending = false;
+    }
+
+    std::uint64_t VulkanSubmissionProgress::SubmittedSerial() const noexcept
+    {
+        return submitted_;
+    }
+
+    std::uint64_t VulkanSubmissionProgress::CompletedSerial() const noexcept
+    {
+        return completed_;
+    }
 
     namespace
     {

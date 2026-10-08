@@ -29,6 +29,19 @@ namespace owl::platform
         Quit,
     };
 
+    enum class Key
+    {
+        Digit0,
+        Digit1,
+        Digit2,
+        Digit3,
+        Digit4,
+        Digit5,
+        Digit6,
+        A,
+        Space,
+    };
+
     class Platform
     {
     public:
@@ -52,6 +65,8 @@ namespace owl::platform
                                                          std::string& error) const;
 
         [[nodiscard]] EventPumpResult PumpEvents() const noexcept;
+        // Keyboard state is refreshed by PumpEvents. Call on the window thread.
+        [[nodiscard]] bool IsKeyDown(Key key) const noexcept;
         [[nodiscard]] std::string SdlVersion() const;
         [[nodiscard]] std::string VideoDriver() const;
 

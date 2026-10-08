@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -28,4 +29,12 @@ TEST_CASE("Empty windows have no framebuffer extent", "[window]")
     owl::platform::Window destination{std::move(source)};
     CHECK_FALSE(source.GetFramebufferExtent().has_value());
     CHECK_FALSE(destination.GetFramebufferExtent().has_value());
+}
+
+TEST_CASE("Empty windows reject title updates", "[window]")
+{
+    owl::platform::Window window;
+    std::string error;
+    CHECK_FALSE(window.SetTitle("Mip test", error));
+    CHECK_FALSE(error.empty());
 }

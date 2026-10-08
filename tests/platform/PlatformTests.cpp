@@ -29,3 +29,11 @@ TEST_CASE("Uninitialized platforms reject window creation", "[platform]")
     CHECK_FALSE(window.has_value());
     CHECK(error == "Platform is not initialized");
 }
+
+TEST_CASE("Uninitialized platforms report no pressed keys", "[platform]")
+{
+    owl::platform::Platform platform;
+    CHECK_FALSE(platform.IsKeyDown(owl::platform::Key::Digit0));
+    CHECK_FALSE(platform.IsKeyDown(owl::platform::Key::A));
+    CHECK_FALSE(platform.IsKeyDown(owl::platform::Key::Space));
+}

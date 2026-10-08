@@ -6,6 +6,7 @@
 #include <owl/vulkan/VulkanTriangle.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <span>
@@ -13,6 +14,15 @@
 
 namespace owl::vulkan::detail
 {
+    bool IsTextureDrawParametersValid(const TextureDrawParameters& parameters,
+                                      const std::uint32_t mipLevels) noexcept
+    {
+        return mipLevels > 0 && std::isfinite(parameters.scale) && parameters.scale > 0.0F &&
+               parameters.scale <= 1.0F &&
+               (!parameters.lod || (std::isfinite(*parameters.lod) && *parameters.lod >= 0.0F &&
+                                    *parameters.lod <= static_cast<float>(mipLevels - 1)));
+    }
+
     std::array<std::byte, 64 * 64 * 4> MakeCheckerboardRgba8() noexcept
     {
         std::array<std::byte, 64 * 64 * 4> result{};
@@ -44,6 +54,13 @@ namespace owl::vulkan
             float position[2];
             float uv[2];
         };
+        struct MipPushConstants
+        {
+            float scale;
+            float lod;
+        };
+        static_assert(sizeof(MipPushConstants) == 8);
+        static_assert(offsetof(MipPushConstants, lod) == 4);
         constexpr std::array<Vertex, 4> Vertices{{
             {{-0.78F, -0.78F}, {0.0F, 0.0F}},
             {{0.78F, -0.78F}, {1.0F, 0.0F}},
@@ -107,7 +124,7 @@ namespace owl::vulkan
     bool VulkanTexturedQuadPipeline::Initialize(const VulkanDevice& device,
                                                 const VulkanAllocator& allocator,
                                                 const TriangleShaderPaths& paths,
-                                                std::string& error)
+                                                std::string& error, const TextureMipMode mipMode)
     {
         if (!device.IsValid() || device_ != VK_NULL_HANDLE)
         {
@@ -123,6 +140,7 @@ namespace owl::vulkan
         vertexShader_ = std::move(*vertex);
         fragmentShader_ = std::move(*fragment);
         device_ = device.Get();
+        mipLevels_ = mipMode == TextureMipMode::SingleLevel ? 1 : 7;
 
         std::array<std::byte, sizeof(Vertices) + sizeof(Indices)> payload{};
         std::memcpy(payload.data(), Vertices.data(), sizeof(Vertices));
@@ -143,30 +161,42 @@ namespace owl::vulkan
             return false;
 
         constexpr VkExtent2D imageExtent{64, 64};
-        constexpr VulkanImageDesc imageDesc{
+        const VulkanImageDesc imageDesc{
             .extent = imageExtent,
             .format = VK_FORMAT_R8G8B8A8_UNORM,
-            .mipLevels = 1,
-            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .mipLevels = mipLevels_,
+            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                     (mipLevels_ > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0U),
         };
         const auto pixels = detail::MakeCheckerboardRgba8();
-        auto imageUpload = VulkanImageUpload::Create(device, allocator, imageDesc,
-                                                     std::as_bytes(std::span{pixels}), error);
+        auto imageUpload = VulkanImageUpload::Create(
+            device, allocator, imageDesc, std::as_bytes(std::span{pixels}), error,
+            mipMode == TextureMipMode::ForceCpu ? MipGenerationMode::ForceCpu
+                                                : MipGenerationMode::Auto);
         if (!imageUpload)
             return false;
+        gpuMipGeneration_ = imageUpload->Path() == MipUploadPath::GpuBlit;
+        const char* path = imageUpload->Path() == MipUploadPath::GpuBlit     ? "GPU linear blit"
+                           : imageUpload->Path() == MipUploadPath::CpuUpload ? "CPU area filter"
+                                                                             : "single level";
+        owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
+                                    "Texture upload: mipLevels=" + std::to_string(mipLevels_) +
+                                        ", generation=" + path);
         imageUpload_ = std::move(*imageUpload);
         if (imageUpload_->Submit(error) != VK_SUCCESS || WaitForUpload(error) != VK_SUCCESS)
             return false;
-        view_ = VulkanImageView::Create(*image_, {}, error);
+        view_ = VulkanImageView::Create(*image_, {.levelCount = mipLevels_}, error);
         if (!view_)
             return false;
         const VulkanSamplerDesc samplerDesc{
             .minFilter = VK_FILTER_NEAREST,
             .magFilter = VK_FILTER_NEAREST,
-            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .mipmapMode =
+                mipLevels_ > 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST,
             .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .maxLod = static_cast<float>(mipLevels_ - 1),
         };
         sampler_ = VulkanSampler::Create(device, samplerDesc, error);
         if (!sampler_)
@@ -226,10 +256,14 @@ namespace owl::vulkan
             .pImageInfo = &imageInfo,
         };
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        const VkPushConstantRange pushRange{
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MipPushConstants)};
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
             .pSetLayouts = &descriptorLayout_,
+            .pushConstantRangeCount = mipLevels_ > 1 ? 1U : 0U,
+            .pPushConstantRanges = mipLevels_ > 1 ? &pushRange : nullptr,
         };
         VkPipelineLayout layout = VK_NULL_HANDLE;
         if (!Check(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &layout),
@@ -238,6 +272,15 @@ namespace owl::vulkan
         layout_ = layout;
         error.clear();
         return true;
+    }
+
+    std::uint32_t VulkanTexturedQuadPipeline::MipLevels() const noexcept
+    {
+        return mipLevels_;
+    }
+    bool VulkanTexturedQuadPipeline::UsesGpuMipGeneration() const noexcept
+    {
+        return gpuMipGeneration_;
     }
 
     VkResult VulkanTexturedQuadPipeline::WaitForUpload(std::string& error)
@@ -410,8 +453,9 @@ namespace owl::vulkan
         return true;
     }
 
-    void VulkanTexturedQuadPipeline::RecordDraw(const VkCommandBuffer command,
-                                                const VkExtent2D extent) const noexcept
+    void
+    VulkanTexturedQuadPipeline::RecordDraw(const VkCommandBuffer command, const VkExtent2D extent,
+                                           const TextureDrawParameters& parameters) const noexcept
     {
         const VkViewport viewport{
             0.0F, 0.0F, static_cast<float>(extent.width), static_cast<float>(extent.height),
@@ -419,6 +463,13 @@ namespace owl::vulkan
         const VkRect2D scissor{{0, 0}, extent};
         const VkDeviceSize vertexOffset = 0;
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+        if (mipLevels_ > 1)
+        {
+            const MipPushConstants push{parameters.scale, parameters.lod.value_or(-1.0F)};
+            vkCmdPushConstants(command, layout_,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(push), &push);
+        }
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,

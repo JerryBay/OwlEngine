@@ -13,13 +13,14 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2B-3 mip generation and the single-mip textured draw are verified.
+- Current phase: M2 GPU resources; M2C-1 graphics submission/completion progress is verified locally.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
   synchronization validation. Private image/view/sampler resources and RGBA8 staging uploads with
-  explicit layout transitions, generated mips and a sampled indexed quad are implemented;
-  runtime retirement remains next.
+  explicit layout transitions, generated mips and a sampled indexed quad are implemented.
+  Renderer frame submissions now have stable serials and fence-observed completion;
+  per-frame upload storage and runtime retirement remain next.
 
 ## Implemented Baseline
 
@@ -76,13 +77,46 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     missing blit support or transfer-source usage selects a CPU area-average chain. CPU sRGB RGB
     filtering decodes/averages/encodes in linear light, while alpha remains linear. The upload
     reports `SingleLevel`, `GpuBlit`, or `CpuUpload`.
+  - `--sample texture-mips` / `texture-mips-cpu`: seven-level texture sampling with digits 0-6
+    selecting explicit LOD, A starting implicit minification/zoom, and Space pausing/resuming.
+    Sandbox owns input/time; the Vulkan owner records eight-byte scale/LOD push constants.
+    Full-range view, sampler and descriptor remain immutable across controls and extent changes.
+  - M2C-1 private `VulkanSubmissionProgress`: each successful renderer graphics submission
+    receives a nonzero, nonwrapping serial retained by its frame slot. Successful fence waits
+    advance host-observed completion monotonically; failed submit/wait leaves progress unchanged.
+    Stats derive serials from the owner, and Sandbox reports both after WaitIdle. Initial signaled
+    fences, startup uploads, acquire/present and scanout have distinct completion contracts.
 - Verified:
+  - 2026-10-08, M2C-1 on VS2026 Debug/RelWithDebInfo: both builds and full opt-in CTest passed
+    122/122 per configuration without skips, with Khronos synchronization/submit-time validation
+    active and zero validation errors/warnings. Five CPU cases cover exact result handling,
+    timeout/device-loss noncompletion, initial fence state, reused identities, completion not
+    regressing and serial exhaustion. Real-GPU Clear/Triangle/Texture/mip frame tests check
+    bounded monotonic progress, successful submit counts, minimize deferral, moves, recreation,
+    both presentation modes and WaitIdle equality. CPU policy tests model error results;
+    native driver failure injection and this revision on VS2022 remain unverified.
+    Formal Clear Sandbox normal-close runs exited with code 0 and reported matching serials:
+    Debug 59/59, RelWithDebInfo 56/56. Those elevated-process runs did not load validation;
+    validation coverage comes from the separate full opt-in CTest runs above.
+  - 2026-10-08, VS2026 Debug/RelWithDebInfo: both builds and full opt-in CTest passed 117/117
+    without skips, with Khronos synchronization/submit-time validation active and zero errors/warnings.
+    Mip frame cases cover explicit LOD 0-6, implicit minification, both present-fence paths and
+    resize/minimize/restore. Independent 64x64 offscreen UNORM draws verify marker/light/dark at
+    LOD 0, analytical average at LOD 6, and implicit sampling matching explicit LOD 4 while
+    differing from LOD 0. Both GPU blits and forced CPU generation were exercised.
+    RenderDoc 1.43/MCP replay confirms one six-index draw, seven image levels, an eight-byte
+    Shader block, expected checkerboard versus uniform average, and a shrinking automatic frame.
+    Synthetic digit/A/Space events changed the title and captured output; this does not replace
+    human acceptance of the keyboard/animation feel. Initial elevated diagnostic runs lacked
+    Layer-path overrides; final verification used process-local medium-integrity child processes.
+    No system Layer registration changed. MCP automatic launch failed; target-control capture
+    and MCP file replay/query/export succeeded. New sample acceptance on VS2022 remains unverified.
   - 2026-09-30, M2B-3 generated mips on VS2026 Debug/RelWithDebInfo: CPU tests cover odd extents, malformed input,
     sRGB linear-light filtering and alpha. GPU tests read back every level of a forced CPU 7x3 chain,
     exercise automatic fallback without transfer-source usage, and read back lower levels from a
     capability-gated RGBA8 GPU blit. Full opt-in CTest passed 106/106 in both configurations,
     with Khronos synchronization validation active and no validation errors. Both upload paths
-    were exercised on NVIDIA GeForce RTX 5060; mip sampling in a visible frame is unverified.
+    were exercised on NVIDIA GeForce RTX 5060; visible mip sampling was unverified at that checkpoint.
   - 2026-09-30, M2B-2 textured quad on VS2026 Debug/RelWithDebInfo: both builds and full opt-in
     CTest presets passed 99/99 each, without skips. The texture frame test covered resize,
     minimize/restore, move, idle, and both present-fence modes; Khronos synchronization validation
@@ -198,7 +232,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A, M2B-1, image owners, textured quad and generated mip uploads implemented; M2C/M2D remain | Both configurations pass 106/106 with synchronization validation; mip-level readback and captured single-mip sampled pixels pass | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling plus M2C-1 submission progress implemented; frame-local uploads, retirement and M2D remain | Both configurations pass 122/122 with synchronization validation; serial lifecycle, mip-level and sampled-pixel readback pass; earlier RenderDoc output inspection passes | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -217,6 +251,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - `VulkanTriangle` owns renderer objects and waits before replacement/destruction; its borrowed
     Window must outlive it and remain unmoved. All renderer calls belong to the window thread.
     The caller pumps events and throttles deferred frames; no per-frame device-idle wait is used.
+  - Submission/completion serials describe this renderer's frame submissions on one graphics
+    queue. They record CPU-observed fence completion, not live GPU polling or WSI release.
+    Successful submit followed by out-of-date Present still consumes a serial. Device loss
+    never advances normal completion. Startup uploads retain their separate blocking fences.
   - Keep Vulkan 1.3 as the minimum. Present fences are optional, with KHR preferred over EXT.
     On unsupported devices, use the approved device-idle recreation/shutdown fallback and report
     its presentation-resource completion guarantee limitation rather than claiming strict WSI safety.
@@ -241,7 +279,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - Presentation fences establish resource release, not display scanout completion. Compatibility
     fallback runs successfully locally but lacks the same specification-level release guarantee.
   - Buffer allocation now uses VMA; uploads still block once at startup on the graphics queue.
-    Streamed/per-frame uploads, visible mip sampling, a general Shader System, and RHI remain later work.
+    Streamed/per-frame uploads, a general Shader System, and RHI remain later work.
 
 ## Entry Points and Evidence
 
@@ -252,6 +290,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Current texture resource slice: `docs/superpowers/plans/2026-09-29-owlengine-m2b-image-resources.md`
 - Current texture upload slice: `docs/superpowers/plans/2026-09-29-owlengine-m2b-image-upload.md`
 - Textured draw slice: `docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md`
+- Mip sampling slice: `docs/superpowers/plans/2026-10-08-owlengine-m2b-mip-sampling.md`;
+  independent pixel tests in `tests/vulkan/TextureSamplingTests.cpp`.
+- Submission progress slice: `docs/superpowers/plans/2026-10-08-owlengine-m2c-submission-progress.md`;
+  state-policy and real-GPU frame expectations in `tests/vulkan/FrameTests.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -293,11 +335,16 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - M2B-2 resource validation logs and scripts: `build/diagnostics/m2b-images-20260929/` (ignored).
 - M2B-2 image upload logs, red/green checks and verification:
   `build/diagnostics/m2b-image-upload-20260929/` (local, ignored).
+- Mip sampling validation logs/results, capture scripts, four RenderDoc frames and exported
+  fixed/automatic output: `build/diagnostics/m2b-mip-sampling-20261008/` (local, ignored).
+- Submission progress red/green checks and both-configuration validation logs/results:
+  `build/diagnostics/m2c-submission-progress-20261008/` (local, ignored).
 
 ## Next Work
 
-- Next checkpoint: frame-local uploads and retirement serials. Preserve the sampled single-mip
-  textured quad and generated mip readback as the validation baselines.
+- Next checkpoint: M2C-2 frame-slot upload storage, resetting/reusing its ranges only after the
+  associated graphics submission has completed; resource retirement follows as a separate slice.
+  Preserve submission progress, single-mip, generated-mip readback and sampled-pixel baselines.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
   per-frame uploads, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

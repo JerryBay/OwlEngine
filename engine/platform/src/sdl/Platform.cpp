@@ -83,6 +83,52 @@ namespace owl::platform
         return EventPumpResult::Continue;
     }
 
+    bool Platform::IsKeyDown(const Key key) const noexcept
+    {
+        if (!initialized_)
+        {
+            return false;
+        }
+
+        SDL_Scancode scancode;
+        switch (key)
+        {
+        case Key::Digit0:
+            scancode = SDL_SCANCODE_0;
+            break;
+        case Key::Digit1:
+            scancode = SDL_SCANCODE_1;
+            break;
+        case Key::Digit2:
+            scancode = SDL_SCANCODE_2;
+            break;
+        case Key::Digit3:
+            scancode = SDL_SCANCODE_3;
+            break;
+        case Key::Digit4:
+            scancode = SDL_SCANCODE_4;
+            break;
+        case Key::Digit5:
+            scancode = SDL_SCANCODE_5;
+            break;
+        case Key::Digit6:
+            scancode = SDL_SCANCODE_6;
+            break;
+        case Key::A:
+            scancode = SDL_SCANCODE_A;
+            break;
+        case Key::Space:
+            scancode = SDL_SCANCODE_SPACE;
+            break;
+        default:
+            return false;
+        }
+
+        int keyCount = 0;
+        const bool* state = SDL_GetKeyboardState(&keyCount);
+        return state != nullptr && static_cast<int>(scancode) < keyCount && state[scancode];
+    }
+
     std::string Platform::SdlVersion() const
     {
         return std::to_string(SDL_MAJOR_VERSION) + "." + std::to_string(SDL_MINOR_VERSION) + "." +

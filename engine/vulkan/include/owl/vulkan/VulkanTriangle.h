@@ -26,6 +26,20 @@ namespace owl::vulkan
         std::filesystem::path fragment;
     };
 
+    enum class TextureMipMode
+    {
+        SingleLevel,
+        Generate,
+        ForceCpu,
+    };
+
+    // Sample-local draw controls. Absence of LOD requests the shader's implicit derivatives.
+    struct TextureDrawParameters
+    {
+        float scale = 1.0F;
+        std::optional<float> lod;
+    };
+
     struct VulkanTriangleOptions
     {
         // Disable to exercise the Vulkan 1.3 compatibility path for diagnostics.
@@ -34,6 +48,8 @@ namespace owl::vulkan
         std::optional<TriangleShaderPaths> triangleShaders;
         // Selects the textured quad sample instead. Mutually exclusive with triangleShaders.
         std::optional<TriangleShaderPaths> textureShaders;
+        // Generated modes require the sample mip shaders' scale/LOD push-constant interface.
+        TextureMipMode textureMipMode = TextureMipMode::SingleLevel;
     };
 
     struct VulkanTriangleStats
@@ -46,6 +62,11 @@ namespace owl::vulkan
         std::uint32_t height = 0;
         bool presentFencesEnabled = false;
         bool validationEnabled = false;
+        std::uint32_t textureMipLevels = 0;
+        bool textureGpuMipGeneration = false;
+        // Renderer graphics-submit domain. Completion does not prove present/scanout release.
+        std::uint64_t submittedSerial = 0;
+        std::uint64_t completedSerial = 0;
     };
 
     // Sample lifecycle. Clears, then optionally draws one configured indexed sample.
@@ -67,7 +88,8 @@ namespace owl::vulkan
         Create(owl::platform::Window& window, std::string& error,
                VulkanTriangleOptions options = {});
         [[nodiscard]] bool IsValid() const noexcept;
-        [[nodiscard]] FrameResult RenderFrame(std::string& error);
+        [[nodiscard]] FrameResult RenderFrame(std::string& error,
+                                              const TextureDrawParameters& parameters = {});
         [[nodiscard]] bool WaitIdle(std::string& error);
         [[nodiscard]] VulkanTriangleStats Stats() const noexcept;
 

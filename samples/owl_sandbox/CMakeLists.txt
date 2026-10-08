@@ -47,12 +47,16 @@ add_custom_target(OwlSandboxAssets
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture.vert.spv"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture.frag.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture_mips.vert.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture_mips.frag.spv"
         "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/assets/m2"
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.vert.spv"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m1/triangle.frag.spv"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture.vert.spv"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture.frag.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture_mips.vert.spv"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/m2/texture_mips.frag.spv"
     VERBATIM
 )
 add_dependencies(OwlSandbox OwlSandboxAssets)
@@ -65,7 +69,7 @@ if(OWL_BUILD_TESTS)
         COMMAND $<TARGET_FILE:OwlSandbox> --help
     )
     set_tests_properties(OwlSandbox.Help PROPERTIES
-        PASS_REGULAR_EXPRESSION "--sample texture"
+        PASS_REGULAR_EXPRESSION "--sample texture-mips-cpu"
     )
 
     add_test(
@@ -109,4 +113,17 @@ if(OWL_BUILD_TESTS)
             -DPROGRAM_ARGUMENT=--unknown
             -P ${PROJECT_SOURCE_DIR}/tests/cmake/ExpectExitCode.cmake
     )
+
+    foreach(mip_sample IN ITEMS texture-mips texture-mips-cpu)
+        add_test(
+            NAME OwlSandbox.${mip_sample}PlatformFailure
+            COMMAND ${CMAKE_COMMAND} -E env SDL_VIDEODRIVER=owl-test-unavailable
+                ${CMAKE_COMMAND}
+                -DPROGRAM=$<TARGET_FILE:OwlSandbox>
+                -DEXPECTED_EXIT_CODE=3
+                -DPROGRAM_ARGUMENT=--sample
+                -DPROGRAM_EXTRA_ARGUMENTS=${mip_sample}
+                -P ${PROJECT_SOURCE_DIR}/tests/cmake/ExpectExitCode.cmake
+        )
+    endforeach()
 endif()

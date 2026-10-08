@@ -37,6 +37,7 @@ namespace owl::vulkan
         VulkanAllocator allocator;
         VulkanSwapchain swapchain;
         VulkanFrameResources frames;
+        VulkanSubmissionProgress submissionProgress;
         VulkanTrianglePipeline triangle;
         VulkanTexturedQuadPipeline texture;
         SampleMode mode = SampleMode::Clear;
@@ -116,29 +117,32 @@ namespace owl::vulkan
                 unresolved = true;
             }
 
-            const auto drainFence = [&](const VkFence fence, bool& pending)
+            const auto drainFence = [&](const VkFence fence, const bool pending)
             {
                 if (!pending)
                     return DestructionDrain::Complete;
                 if (fence == VK_NULL_HANDLE)
                     return DestructionDrain::Unresolved;
-                const auto result = vkWaitForFences(
-                    device.Get(), 1, &fence, VK_TRUE,
-                    std::numeric_limits<std::uint64_t>::max());
-                const auto status = classify(result);
-                if (status == DestructionDrain::Complete)
-                    pending = false;
-                return status;
+                const auto result = vkWaitForFences(device.Get(), 1, &fence, VK_TRUE,
+                                                    std::numeric_limits<std::uint64_t>::max());
+                return classify(result);
             };
             for (auto& slot : frames.slots)
             {
                 for (bool* pending : {&slot.submissionPending, &slot.acquisitionPending})
                 {
-                    const VkFence fence = pending == &slot.submissionPending ? slot.complete
-                                                                            : slot.acquired;
+                    const VkFence fence =
+                        pending == &slot.submissionPending ? slot.complete : slot.acquired;
                     const auto status = drainFence(fence, *pending);
                     if (status == DestructionDrain::DeviceLost)
                         return status;
+                    if (status == DestructionDrain::Complete)
+                    {
+                        if (pending == &slot.submissionPending)
+                            submissionProgress.RecordWaitResult(slot, VK_SUCCESS);
+                        else
+                            *pending = false;
+                    }
                     unresolved = unresolved || status == DestructionDrain::Unresolved;
                 }
             }
@@ -152,6 +156,8 @@ namespace owl::vulkan
                 const auto status = drainFence(image.released, image.presentPending);
                 if (status == DestructionDrain::DeviceLost)
                     return status;
+                if (status == DestructionDrain::Complete)
+                    image.presentPending = false;
                 unresolved = unresolved || status == DestructionDrain::Unresolved;
             }
             if (!unresolved)
@@ -166,10 +172,11 @@ namespace owl::vulkan
             texture.MarkUploadCompleteAfterQueueIdleForDestruction();
             for (auto& slot : frames.slots)
             {
-                slot.submissionPending = false;
+                submissionProgress.RecordWaitResult(slot, VK_SUCCESS);
                 const auto status = drainFence(slot.acquired, slot.acquisitionPending);
                 if (status != DestructionDrain::Complete)
                     return status;
+                slot.acquisitionPending = false;
             }
             for (auto& image : frames.images)
             {
@@ -182,6 +189,7 @@ namespace owl::vulkan
                 const auto status = drainFence(image.released, image.presentPending);
                 if (status != DestructionDrain::Complete)
                     return status;
+                image.presentPending = false;
             }
             return DestructionDrain::Complete;
         }
@@ -212,7 +220,7 @@ namespace owl::vulkan
             {
                 if (!WaitFence(slot.complete, "vkWaitForFences(submit)", error))
                     return false;
-                slot.submissionPending = false;
+                submissionProgress.RecordWaitResult(slot, VK_SUCCESS);
             }
             if (slot.acquisitionPending)
             {
@@ -327,7 +335,7 @@ namespace owl::vulkan
         }
 
         bool RecordFrame(const VulkanFrameSlot& slot, const std::uint32_t imageIndex,
-                         std::string& error)
+                         std::string& error, const TextureDrawParameters& parameters)
         {
             if (!Check(vkResetCommandPool(device.Get(), slot.commandPool, 0), "vkResetCommandPool",
                        error))
@@ -379,7 +387,7 @@ namespace owl::vulkan
             if (mode == SampleMode::Triangle)
                 triangle.RecordDraw(slot.commandBuffer, swapchain.Extent());
             else if (mode == SampleMode::Texture)
-                texture.RecordDraw(slot.commandBuffer, swapchain.Extent());
+                texture.RecordDraw(slot.commandBuffer, swapchain.Extent(), parameters);
             vkCmdEndRendering(slot.commandBuffer);
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -391,7 +399,7 @@ namespace owl::vulkan
             return Check(vkEndCommandBuffer(slot.commandBuffer), "vkEndCommandBuffer", error);
         }
 
-        FrameResult RenderFrame(std::string& error)
+        FrameResult RenderFrame(std::string& error, const TextureDrawParameters& parameters)
         {
             error.clear();
             if (failed)
@@ -430,6 +438,14 @@ namespace owl::vulkan
             auto& slot = frames.slots[frameIndex];
             if (!WaitSlot(slot, error))
                 return FrameResult::Failed;
+            if (!submissionProgress.CanSubmit(slot))
+            {
+                failed = true;
+                failure = error =
+                    "Graphics submission requires a reusable slot and a nonzero serial";
+                owl::foundation::LogMessage(owl::foundation::LogLevel::Error, "Vulkan", error);
+                return FrameResult::Failed;
+            }
             std::uint32_t imageIndex = 0;
             constexpr std::uint64_t AcquireTimeoutNs = 16'000'000;
             const VkResult acquire =
@@ -451,7 +467,7 @@ namespace owl::vulkan
             slot.acquisitionPending = true;
             recreateRequested = acquire == VK_SUBOPTIMAL_KHR;
             auto& image = frames.images[imageIndex];
-            if (!WaitPresent(image, error) || !RecordFrame(slot, imageIndex, error))
+            if (!WaitPresent(image, error) || !RecordFrame(slot, imageIndex, error, parameters))
                 return FrameResult::Failed;
 
             const VkSemaphoreSubmitInfo wait{
@@ -479,11 +495,13 @@ namespace owl::vulkan
             };
             // Only reset now: acquire retry and recording errors must not strand this fence.
             if (!Check(vkResetFences(device.Get(), 1, &slot.complete), "vkResetFences(submit)",
-                       error) ||
-                !Check(vkQueueSubmit2(device.GraphicsQueue(), 1, &submit, slot.complete),
-                       "vkQueueSubmit2", error))
+                       error))
                 return FrameResult::Failed;
-            slot.submissionPending = true;
+            const auto submitResult =
+                vkQueueSubmit2(device.GraphicsQueue(), 1, &submit, slot.complete);
+            submissionProgress.RecordSubmitResult(slot, submitResult);
+            if (!Check(submitResult, "vkQueueSubmit2", error))
+                return FrameResult::Failed;
             ++stats.submittedFrames;
             if (mode != SampleMode::Clear)
                 ++stats.indexedDraws;
@@ -533,6 +551,11 @@ namespace owl::vulkan
             error = "Cannot select triangle and texture samples simultaneously";
             return std::nullopt;
         }
+        if (options.textureMipMode != TextureMipMode::SingleLevel && !options.textureShaders)
+        {
+            error = "Mip generation requires the texture sample shaders";
+            return std::nullopt;
+        }
         SDL_Window* native = owl::platform::SDLWindowAccess::Get(window);
         if (!window.IsValid() || native == nullptr ||
             (SDL_GetWindowFlags(native) & SDL_WINDOW_VULKAN) == 0)
@@ -577,9 +600,12 @@ namespace owl::vulkan
             else
             {
                 if (!impl->texture.Initialize(impl->device, impl->allocator,
-                                              *options.textureShaders, error))
+                                              *options.textureShaders, error,
+                                              options.textureMipMode))
                     return std::nullopt;
                 impl->mode = Impl::SampleMode::Texture;
+                impl->stats.textureMipLevels = impl->texture.MipLevels();
+                impl->stats.textureGpuMipGeneration = impl->texture.UsesGpuMipGeneration();
             }
         }
         if (!impl->frames.Initialize(impl->device.Get(),
@@ -602,14 +628,22 @@ namespace owl::vulkan
     {
         return impl_ != nullptr && !impl_->failed;
     }
-    FrameResult VulkanTriangle::RenderFrame(std::string& error)
+    FrameResult VulkanTriangle::RenderFrame(std::string& error,
+                                            const TextureDrawParameters& parameters)
     {
         if (!impl_)
         {
             error = "Cannot render with an empty Vulkan renderer";
             return FrameResult::Failed;
         }
-        return impl_->RenderFrame(error);
+        if (impl_->mode == Impl::SampleMode::Texture &&
+            (!detail::IsTextureDrawParametersValid(parameters, impl_->texture.MipLevels()) ||
+             (impl_->texture.MipLevels() == 1 && parameters.scale != 1.0F)))
+        {
+            error = "Texture draw requires a finite scale in (0, 1] and LOD inside the mip view";
+            return FrameResult::Failed;
+        }
+        return impl_->RenderFrame(error, parameters);
     }
     bool VulkanTriangle::WaitIdle(std::string& error)
     {
@@ -618,6 +652,11 @@ namespace owl::vulkan
     }
     VulkanTriangleStats VulkanTriangle::Stats() const noexcept
     {
-        return impl_ ? impl_->stats : VulkanTriangleStats{};
+        if (!impl_)
+            return {};
+        auto snapshot = impl_->stats;
+        snapshot.submittedSerial = impl_->submissionProgress.SubmittedSerial();
+        snapshot.completedSerial = impl_->submissionProgress.CompletedSerial();
+        return snapshot;
     }
 } // namespace owl::vulkan

@@ -42,6 +42,17 @@ namespace owl::foundation
             return ParsedCommandLine{.command = Command::Texture};
         }
 
+        if (arguments.size() == 2 && arguments[0] == "--sample" && arguments[1] == "texture-mips")
+        {
+            return ParsedCommandLine{.command = Command::TextureMips};
+        }
+
+        if (arguments.size() == 2 && arguments[0] == "--sample" &&
+            arguments[1] == "texture-mips-cpu")
+        {
+            return ParsedCommandLine{.command = Command::TextureMipsCpu};
+        }
+
         return ParsedCommandLine{
             .command = Command::Invalid,
             .error = "unknown command line",

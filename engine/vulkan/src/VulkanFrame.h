@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,8 @@ namespace owl::vulkan
         };
         [[nodiscard]] AcquireAction ClassifyAcquireResult(VkResult result) noexcept;
         [[nodiscard]] PresentDecision ClassifyPresentResult(VkResult result) noexcept;
+        [[nodiscard]] std::optional<std::uint64_t>
+        NextSubmissionSerial(std::uint64_t submitted) noexcept;
     } // namespace detail
 
     struct VulkanFrameSlot
@@ -38,6 +41,26 @@ namespace owl::vulkan
         VkFence acquired = VK_NULL_HANDLE;
         bool submissionPending = false;
         bool acquisitionPending = false;
+        // Last graphics submission associated with complete; zero means never submitted.
+        std::uint64_t submissionSerial = 0;
+    };
+
+    // CPU bookkeeping for one renderer's graphics queue, not a GPU semaphore or WSI proof.
+    // Check CanSubmit before native submission; record the exact submit/wait results.
+    // A successful queue/device-idle observation may complete pending slots with VK_SUCCESS.
+    // Single-threaded; startup uploads and acquire/present have independent completion rules.
+    class VulkanSubmissionProgress
+    {
+    public:
+        [[nodiscard]] bool CanSubmit(const VulkanFrameSlot& slot) const noexcept;
+        void RecordSubmitResult(VulkanFrameSlot& slot, VkResult result) noexcept;
+        void RecordWaitResult(VulkanFrameSlot& slot, VkResult result) noexcept;
+        [[nodiscard]] std::uint64_t SubmittedSerial() const noexcept;
+        [[nodiscard]] std::uint64_t CompletedSerial() const noexcept;
+
+    private:
+        std::uint64_t submitted_ = 0;
+        std::uint64_t completed_ = 0;
     };
 
     struct VulkanPresentImage

@@ -112,6 +112,48 @@ TEST_CASE("Texture sample rejects trailing arguments", "[command-line]")
     CHECK_FALSE(parsed.error.empty());
 }
 
+TEST_CASE("Mip texture samples select distinct commands", "[command-line]")
+{
+    SECTION("Format-gated GPU generation")
+    {
+        constexpr std::array arguments{
+            std::string_view{"--sample"},
+            std::string_view{"texture-mips"},
+        };
+        const auto parsed = ParseCommandLine(arguments);
+        CHECK(parsed.command == Command::TextureMips);
+        CHECK(parsed.error.empty());
+    }
+
+    SECTION("Forced CPU generation")
+    {
+        constexpr std::array arguments{
+            std::string_view{"--sample"},
+            std::string_view{"texture-mips-cpu"},
+        };
+        const auto parsed = ParseCommandLine(arguments);
+        CHECK(parsed.command == Command::TextureMipsCpu);
+        CHECK(parsed.error.empty());
+    }
+}
+
+TEST_CASE("Mip texture samples reject trailing arguments", "[command-line]")
+{
+    for (const auto sample :
+         {std::string_view{"texture-mips"}, std::string_view{"texture-mips-cpu"}})
+    {
+        CAPTURE(sample);
+        const std::array arguments{
+            std::string_view{"--sample"},
+            sample,
+            std::string_view{"unexpected"},
+        };
+        const auto parsed = ParseCommandLine(arguments);
+        CHECK(parsed.command == Command::Invalid);
+        CHECK_FALSE(parsed.error.empty());
+    }
+}
+
 TEST_CASE("Unknown sample names are invalid", "[command-line]")
 {
     constexpr std::array arguments{

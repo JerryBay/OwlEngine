@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace owl::platform
 {
@@ -28,6 +29,7 @@ namespace owl::platform
 
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] std::optional<FramebufferExtent> GetFramebufferExtent() const noexcept;
+        [[nodiscard]] bool SetTitle(const std::string& title, std::string& error);
 
     private:
         friend class Platform;

@@ -6,6 +6,7 @@
 #include "VulkanImageUpload.h"
 #include "VulkanImageView.h"
 #include "VulkanSampler.h"
+#include <owl/vulkan/VulkanTriangle.h>
 
 #include <array>
 #include <cstddef>
@@ -17,6 +18,8 @@
 namespace owl::vulkan::detail
 {
     [[nodiscard]] std::array<std::byte, 64 * 64 * 4> MakeCheckerboardRgba8() noexcept;
+    [[nodiscard]] bool IsTextureDrawParametersValid(const TextureDrawParameters& parameters,
+                                                    std::uint32_t mipLevels) noexcept;
 } // namespace owl::vulkan::detail
 
 namespace owl::vulkan
@@ -35,13 +38,17 @@ namespace owl::vulkan
         VulkanTexturedQuadPipeline& operator=(const VulkanTexturedQuadPipeline&) = delete;
 
         [[nodiscard]] bool Initialize(const VulkanDevice& device, const VulkanAllocator& allocator,
-                                      const TriangleShaderPaths& paths, std::string& error);
+                                      const TriangleShaderPaths& paths, std::string& error,
+                                      TextureMipMode mipMode = TextureMipMode::SingleLevel);
+        [[nodiscard]] std::uint32_t MipLevels() const noexcept;
+        [[nodiscard]] bool UsesGpuMipGeneration() const noexcept;
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
         [[nodiscard]] VkResult WaitForUpload(std::string& error);
         [[nodiscard]] VkResult DrainUploadForDestruction() noexcept;
         void MarkUploadCompleteAfterQueueIdleForDestruction() noexcept;
         void MarkUploadDeviceLostForDestruction() noexcept;
-        void RecordDraw(VkCommandBuffer command, VkExtent2D extent) const noexcept;
+        void RecordDraw(VkCommandBuffer command, VkExtent2D extent,
+                        const TextureDrawParameters& parameters) const noexcept;
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
@@ -57,6 +64,8 @@ namespace owl::vulkan
         VkPipelineLayout layout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;
+        std::uint32_t mipLevels_ = 1;
+        bool gpuMipGeneration_ = false;
         std::vector<std::uint32_t> vertexShader_;
         std::vector<std::uint32_t> fragmentShader_;
     };

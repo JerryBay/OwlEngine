@@ -56,6 +56,24 @@ namespace owl::platform
         return extent;
     }
 
+    bool Window::SetTitle(const std::string& title, std::string& error)
+    {
+        if (!IsValid())
+        {
+            error = "Window is not initialized";
+            return false;
+        }
+
+        if (!SDL_SetWindowTitle(impl_->window, title.c_str()))
+        {
+            error = std::string{"SDL_SetWindowTitle failed: "} + SDL_GetError();
+            return false;
+        }
+
+        error.clear();
+        return true;
+    }
+
     SDL_Window* SDLWindowAccess::Get(Window& window) noexcept
     {
         return window.impl_ != nullptr ? window.impl_->window : nullptr;

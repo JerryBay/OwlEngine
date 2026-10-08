@@ -137,6 +137,28 @@ GPU 仍在使用某个 Set 时，不能随意改写它引用的描述符或销�
 资源准备、命令录制、GPU 执行可以处于不同进度。资源复用和销毁需要相应的完成条件，
 不能用“CPU 已经走到下一帧”作为依据；多帧并行正是需要明确管理这些重叠生命周期的原因之一。
 
+### 提交身份与完成进度
+
+Fence 是可复用的同步对象，不是某一次提交的永久身份。两个 Frame Slot 可以交替复用两个 Fence，
+但依次提交的工作仍需要各自的身份，例如 1、2、3。只有 Queue Submit 成功后才分配提交序号；
+最初就处于 signaled 状态的 Fence，没有对应的历史提交，不能据此推进完成进度。
+
+CPU 成功等待某次提交的 Fence 后，可以把该提交标记为已完成。同一 Queue 上，Submit 的 Fence
+信号范围包含更早提交的命令及更早的信号操作，因此观察到序号 3 完成后，完成进度可以推进到 3；
+随后再处理序号 2 的等待结果也不能使进度倒退。这个结论来自 Fence 的同步范围，不能泛化成
+“GPU 按顺序完整执行每一个 Draw”，也不能直接套到另一条 Queue。
+参见 [Vulkan Fence 信号范围](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-fences-signaling)。
+
+完成序号记录的是 CPU 已确认的进度，可能落后于 GPU 的真实进度。它本身不会同步 GPU，也不是
+Timeline Semaphore；等待超时、查询未就绪或 Device Lost 都不能算正常完成。Fence 重置并用于
+新提交前，应先记录旧提交的完成证据，否则复用后的句柄无法再说明旧提交的状态。
+
+这类身份可以成为资源回收的依据：某个上传范围或资源最后被提交 N 使用，确认所属提交域的
+完成进度达到 N，且没有其他未完成的使用后，才能复用或销毁。CPU 帧号、Swapchain Image 索引和
+屏幕是否显示不是这个条件；Acquire/Present 资源也有自己的释放规则。多 Queue 时应分别跟踪
+使用和完成依赖，不能把不同 Queue 的数字直接比较。完成判断仍不能替代 Barrier 或非 coherent
+内存的 Flush/Invalidate。
+
 ## 6. 同步、图像布局与呈现
 
 同步要区分**执行依赖**和**内存依赖**：规定操作先后，与让先前写入对后续访问可见，并不是同一件事。
@@ -166,6 +188,36 @@ Barrier 的阶段、访问范围和图像布局需要围绕真实的资源使用
 
 继续深入：Fence、Semaphore、Barrier 各自覆盖的范围，以及渲染完成和呈现资源可复用之间的区别。
 参见 [Khronos：同步](https://docs.vulkan.org/guide/latest/synchronization.html)。
+
+### Mip 生成与 LOD 选择是两个环节
+
+生成 mip 为纹理准备逐级缩小的像素数据。采样时还要由 Shader 的采样指令选择 LOD，并满足
+ImageView 可见的层范围和 Sampler 的 LOD 限制；只创建或填满多层 Image，不能证明绘制用了低层。
+
+Fragment Shader 的隐式采样 `texture()` 根据 UV 在屏幕上的变化估计像素覆盖的纹理范围。
+纹理在屏幕上缩小时，一个像素覆盖更多 texel，通常选择更高的 LOD 编号，即更低分辨率的 mip。
+近似关系是 `LOD ≈ log2(每个屏幕像素覆盖的 texel 数)`。实际选择还受采样指令、LOD bias、
+Sampler 限制、View 范围和过滤规则影响；各向异性、非均匀缩放等情况不能只用一个比例概括。
+`textureLod()` 则显式给出 LOD，适合独立检查某层数据，不能证明隐式导数选择正确。
+隐式导数采样需要满足 Shader 执行条件，例如避免非一致控制流中的未定义导数。
+参见 [Vulkan 采样规则](https://docs.vulkan.org/spec/latest/chapters/textures.html)。
+
+层内的 `minFilter/magFilter` 与层间的 `mipmapMode` 是独立选择。Nearest 层内采样仍可搭配
+Linear mip 插值：先分别取相邻两层的 texel，再按 LOD 小数部分混合。最高层为 1x1 时，
+采样显示平均颜色是合理结果；原图中的小标记已经参与降采样，不能继续要求它保持原形。
+
+### Push Constants 与每次 Draw 的小量参数
+
+Push Constants 通过命令录制传递少量 Shader 数据，Pipeline Layout 声明允许的字节范围和 Stage，
+C++ 与 Shader 必须约定相同偏移和布局。`vkCmdPushConstants` 录制数据值，调用者的临时结构体
+无需一直存活到 GPU 执行；CommandBuffer 及其引用的纹理等资源仍需满足各自的在途生命周期。
+重新录制时初始值未定义，使用前应设置需要的范围。参见
+[Khronos Push Constants 指南](https://docs.vulkan.org/guide/latest/push_constants.html)。
+
+缩放、显式 LOD 等小量 Draw 参数适合采用这种路径：变化的是录入命令的数据，纹理像素和
+Descriptor 绑定可以保持不变。它不替代纹理上传、资源同步，也不意味着可以安全修改在途
+Uniform Buffer。后续 DX12 可用 Root Constants 表达类似需求，但布局、容量和更新规则要按
+第二个 API 的真实约束设计，不能预先当成完全相同的接口。
 
 ## 7. GPU 捕获是怎样帮助验证的
 

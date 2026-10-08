@@ -195,8 +195,11 @@ layer activation and the full logs. A run reporting an unavailable layer is only
 For image-resource and upload checks, use `ctest --preset windows-vs2026-debug -R '(Image|image|Sampler|sampler|mip|Mip)'`
 with the same GPU opt-in and validation environment; replace `debug` with `relwithdebinfo` for the other
 configuration. These cases check resource lifetimes, uploaded bytes, both mip generation paths and
-each CPU-generated mip's bytes. GPU blit checks read back lower levels. The Texture visual sample
-still uses one mip; generated mip sampling in a frame is not yet a visual acceptance claim.
+each CPU-generated mip's bytes. GPU blit checks read back lower levels. Frame tests also exercise
+LOD 0-6 and implicit minification with seven-level textures through resize/minimize/restore.
+The two `[sampling]` tests independently draw to a 64x64 UNORM target and read pixels back:
+LOD 0 marker/light/dark, LOD 6 analytical average, and implicit sampling matching LOD 4 while
+different from LOD 0. RenderDoc inspection complements this; lifecycle tests alone cannot establish it.
 
 ```powershell
 ./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample triangle
@@ -217,6 +220,30 @@ The ordinary build requires no shader compiler. To edit shaders, see the adjacen
 The first pipeline's [ownership and memory notes](../learning/m1-triangle.md) explain its deliberate
 limits; general shader compilation, reflection, and resource allocation systems remain later work.
 
+## Inspect Graphics Submission Progress
+
+Each successful renderer graphics submit receives a serial. `submittedSerial` is the latest
+accepted submission; `completedSerial` is the latest completion observed through a successful
+fence wait. The latter can lag actual GPU execution until the CPU checks completion.
+
+For a focused CPU check, build first and run from the repository root:
+
+```powershell
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[submission]'
+```
+
+Expect five cases to pass. They check failed submits/waits, fence reuse, monotonic completion,
+initial no-submission state and exhaustion without wrapping to zero. No Vulkan window is needed.
+With the GPU opt-in and process-local validation environment above, the full CTest presets also
+verify progress through Clear/Triangle/Texture/mip frame loops, including minimize/restore,
+recreation, moves and both presentation modes. The current local full result is 122/122 for each
+VS2026 configuration, without skips or validation errors/warnings.
+
+Run any Vulkan Sandbox sample, render some frames, then exit normally. Its exit log includes
+`submitted serial` and `completed serial`; after successful WaitIdle they should be equal and
+nonzero. This checks graphics submission completion, not display scanout or presentation-resource
+release. Startup geometry/texture uploads have their own completion contract and are not counted.
+
 ## Run the Textured Quad Sample
 
 ```powershell
@@ -236,6 +263,33 @@ Running does not require a shader compiler; to edit them, follow the adjacent
 With the GPU opt-in and validation environment above, both full CTest presets include the texture
 frame lifecycle test. A RenderDoc capture should contain one six-index draw with a sampled 64x64
 RGBA8 image at set 0, binding 0. Build/test success alone does not prove the final pixels.
+
+## Inspect Mip Sampling
+
+```powershell
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample texture-mips
+# Force the CPU generation path for comparison.
+./build/windows-vs2026/bin/Debug/OwlSandbox.exe --sample texture-mips-cpu
+```
+
+These are persistent windows; the ordinary `texture` sample still uses one mip. Startup logs and
+the title report the actual GPU-blit or CPU-filtering path. The image contains seven levels,
+64x64 down to 1x1, with a full-range view and sampler `maxLod = 6`.
+
+- Top-row digits **0-6** select a fixed LOD while keeping the quad large. LOD 0 matches the
+  original checkerboard; LOD 3 is an 8x8 image; LOD 6 is one averaged texel filling the quad.
+- **A** selects implicit LOD and starts a 16-second shrink/grow cycle from scale 1 to 1/128.
+  Watch the reduced texture converge to its averaged color. **Space** pauses/resumes the zoom.
+- Resize/minimize/restore, then exit with Escape or close. No texture re-upload or descriptor
+  update occurs when changing the mode; only scale and LOD push constants change.
+
+Sampling within each level stays nearest; fractional LOD blends adjacent levels. This makes
+individual mip texels visible and avoids adding a spatial linear-filtering requirement.
+At 1x1 the asymmetric marker contributes only to the average, so it no longer appears as a tile.
+
+In RenderDoc inspect the six-index draw: set 0/binding 0, seven image/view levels, LOD clamp 0-6,
+and push-constant offsets 0/4. Capture fixed LOD 0 and 6 plus a small automatic frame and compare
+the render targets. Use the same RenderDoc version for capture and MCP replay (currently 1.43).
 
 ## Image Upload and Readback Tests
 

@@ -33,8 +33,12 @@ private Image/ImageView/Sampler owners, single-mip RGBA8 uploads, exact image re
 textured indexed-quad sample with one combined image sampler. The M2B-2 checkpoint passed 99/99
 tests in both VS2026 configurations; a RenderDoc capture confirms sampled output.
 M2B-3 adds capability-gated GPU mip blits and a CPU linear-light fallback, with per-level
-readback tests. Both VS2026 configurations now pass 106/106 opt-in tests. The visual sample still
-uses one mip; frame-local uploads remain next. See the
+readback tests. The mip sampling Demo adds fixed LOD 0-6 and automatic minification with GPU/CPU
+generation modes; RenderDoc/MCP confirms fixed-LOD output.
+M2C-1 gives successful frame submissions stable serials and tracks fence-observed completion,
+preparing for safe reuse and retirement while frames are in flight. Both VS2026 configurations
+pass 122/122 opt-in tests with synchronization validation, including serial lifecycle and
+independent sampled-pixel readback. Frame-local upload storage remains next. See the
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
@@ -62,6 +66,10 @@ ctest --preset windows-vs2022-debug
 
 # Run the textured checkerboard quad.
 ./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample texture
+
+# Inspect all seven mip levels: 0-6 select LOD, A zooms, Space pauses.
+./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample texture-mips
+# Use --sample texture-mips-cpu to compare CPU-generated mips.
 ```
 
 See [Windows build instructions](docs/building/windows.md) for prerequisites, clean reconfigure,

@@ -13,6 +13,8 @@ namespace owl::foundation
         Clear,
         Triangle,
         Texture,
+        TextureMips,
+        TextureMipsCpu,
         Invalid,
     };
 
