@@ -18,6 +18,7 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/DeviceTests.cpp
     vulkan/BufferTests.cpp
     vulkan/BufferUploadTests.cpp
+    vulkan/UploadArenaTests.cpp
     vulkan/FrameTests.cpp
     vulkan/ImageTests.cpp
     vulkan/ImageResourceTests.cpp

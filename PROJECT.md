@@ -13,14 +13,15 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2C-1 graphics submission/completion progress is verified locally.
+- Current phase: M2 GPU resources; M2C-2 Task 1 CPU upload-range/reuse policies are verified locally.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
   synchronization validation. Private image/view/sampler resources and RGBA8 staging uploads with
   explicit layout transitions, generated mips and a sampled indexed quad are implemented.
-  Renderer frame submissions now have stable serials and fence-observed completion;
-  per-frame upload storage and runtime retirement remain next.
+  Renderer frame submissions now have stable serials and fence-observed completion. CPU policies
+  for bounded upload ranges, sealing and completion-gated reuse are implemented; persistent upload
+  mapping, per-frame storage/integration and runtime retirement remain next.
 
 ## Implemented Baseline
 
@@ -86,7 +87,17 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     advance host-observed completion monotonically; failed submit/wait leaves progress unchanged.
     Stats derive serials from the owner, and Sandbox reports both after WaitIdle. Initial signaled
     fences, startup uploads, acquire/present and scanout have distinct completion contracts.
+  - M2C-2 Task 1 private `detail::FindUploadRange` / `UploadArenaState`: overflow-safe aligned
+    ranges, separate preview/commit, nonempty sealing, successful-submission identity, and
+    completion-gated reset. This is CPU metadata only; it does not allocate GPU storage or change
+    the renderer. The future arena will compose it with its owned buffer.
 - Verified:
+  - 2026-10-09, M2C-2 Task 1: `OwlUnitTests` target builds succeed in VS2026 Debug/RelWithDebInfo.
+    New CPU tests first failed against placeholders, then passed 12 cases / 285 assertions in
+    the focused Debug run. CTest covering these cases plus existing submission and buffer policies
+    passes 20/20 in each configuration, without skips. Formatting/diff checks pass. This task
+    adds no native Vulkan calls; full GPU/validation/Sandbox regression was not rerun. Logs are
+    under `build/m2c2-task1-*.log` (ignored); the previous 122/122 full run remains historical.
   - 2026-10-08, M2C-1 on VS2026 Debug/RelWithDebInfo: both builds and full opt-in CTest passed
     122/122 per configuration without skips, with Khronos synchronization/submit-time validation
     active and zero validation errors/warnings. Five CPU cases cover exact result handling,
@@ -232,7 +243,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling plus M2C-1 submission progress implemented; frame-local uploads, retirement and M2D remain | Both configurations pass 122/122 with synchronization validation; serial lifecycle, mip-level and sampled-pixel readback pass; earlier RenderDoc output inspection passes | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling, M2C-1 progress, and M2C-2 CPU upload policies implemented; runtime frame uploads, retirement and M2D remain | Task 1 focused CPU CTest passes 20/20 in both configurations; last full M2C-1 baseline passed 122/122 with synchronization validation and earlier RenderDoc inspection | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -294,6 +305,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   independent pixel tests in `tests/vulkan/TextureSamplingTests.cpp`.
 - Submission progress slice: `docs/superpowers/plans/2026-10-08-owlengine-m2c-submission-progress.md`;
   state-policy and real-GPU frame expectations in `tests/vulkan/FrameTests.cpp`.
+- Frame-slot upload storage plan (Task 1 CPU policies verified; runtime storage pending):
+  `docs/superpowers/plans/2026-10-09-owlengine-m2c2-frame-upload-storage.md`;
+  `engine/vulkan/src/VulkanUploadArena.{h,cpp}` and `tests/vulkan/UploadArenaTests.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -342,8 +356,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 
 ## Next Work
 
-- Next checkpoint: M2C-2 frame-slot upload storage, resetting/reusing its ranges only after the
-  associated graphics submission has completed; resource retirement follows as a separate slice.
+- Next task: M2C-2 Task 2, opt-in persistent mapping in `VulkanBuffer`, following the linked plan.
+  Task 1 range/reuse policies are verified; actual arena storage, per-slot streamed geometry and
+  GPU verification remain pending. Reset/reuse only after associated submissions complete, and
+  retain separate per-slot destinations. Resource retirement follows as a separate slice.
   Preserve submission progress, single-mip, generated-mip readback and sampled-pixel baselines.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
   per-frame uploads, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
