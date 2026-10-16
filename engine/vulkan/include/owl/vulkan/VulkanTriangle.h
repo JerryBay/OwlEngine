@@ -50,6 +50,8 @@ namespace owl::vulkan
         std::optional<TriangleShaderPaths> textureShaders;
         // Generated modes require the sample mip shaders' scale/LOD push-constant interface.
         TextureMipMode textureMipMode = TextureMipMode::SingleLevel;
+        // Upload CPU-scaled geometry each frame; requires generated-mip texture shaders.
+        bool streamTextureGeometry = false;
     };
 
     struct VulkanTriangleStats
@@ -67,6 +69,9 @@ namespace owl::vulkan
         // Renderer graphics-submit domain. Completion does not prove present/scanout release.
         std::uint64_t submittedSerial = 0;
         std::uint64_t completedSerial = 0;
+        // Logical staging capacity and payload bytes from successful frame submissions only.
+        std::uint64_t frameUploadCapacityBytes = 0;
+        std::uint64_t frameUploadedBytes = 0;
     };
 
     // Sample lifecycle. Clears, then optionally draws one configured indexed sample.

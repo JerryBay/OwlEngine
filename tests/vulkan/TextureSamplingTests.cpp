@@ -1,6 +1,7 @@
 #include "GpuTestContext.h"
 #include "VulkanBuffer.h"
 #include "VulkanTexturedQuadPipeline.h"
+#include "VulkanUploadArena.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -27,7 +28,8 @@ namespace
     std::optional<std::vector<std::byte>>
     DrawAndReadback(const owl::tests::GpuContext& context,
                     const VulkanTexturedQuadPipeline& pipeline,
-                    const TextureDrawParameters& parameters, std::string& error);
+                    const TextureDrawParameters& parameters, std::string& error,
+                    std::optional<std::size_t> streamingSlot = std::nullopt);
 
     Pixel PixelAt(const std::vector<std::byte>& pixels, const std::size_t x, const std::size_t y)
     {
@@ -60,6 +62,7 @@ namespace
         VkCommandPool pool = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         std::optional<VulkanBuffer> readback;
+        std::optional<VulkanUploadArena> upload;
         bool pending = false;
 
         DrawResources() = default;
@@ -68,8 +71,8 @@ namespace
 
         ~DrawResources()
         {
-            // Also protects pipeline/descriptor resources owned by the caller if a
-            // failed assertion unwinds while this draw is still submitted.
+            // Drain before member buffers/arena and caller-owned pipeline resources
+            // can be destroyed, including on failed assertions or early returns.
             if (pending)
             {
                 auto result = vkWaitForFences(device, 1, &fence, VK_TRUE,
@@ -99,12 +102,19 @@ namespace
     std::optional<std::vector<std::byte>>
     DrawAndReadback(const owl::tests::GpuContext& context,
                     const VulkanTexturedQuadPipeline& pipeline,
-                    const TextureDrawParameters& parameters, std::string& error)
+                    const TextureDrawParameters& parameters, std::string& error,
+                    const std::optional<std::size_t> streamingSlot)
     {
         DrawResources resources;
         resources.device = context.device->Get();
         resources.queue = context.device->GraphicsQueue();
         resources.allocator = context.allocator->Get();
+        if (streamingSlot)
+        {
+            resources.upload = VulkanUploadArena::Create(*context.allocator, 256, error);
+            if (!resources.upload || !resources.upload->Begin(0, error))
+                return std::nullopt;
+        }
         const VkImageCreateInfo imageInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType = VK_IMAGE_TYPE_2D,
@@ -181,6 +191,17 @@ namespace
         if (!NativeSuccess(vkBeginCommandBuffer(command, &beginInfo),
                            "vkBeginCommandBuffer(texture sampling)", error))
             return std::nullopt;
+        if (streamingSlot)
+        {
+            if (!pipeline.RecordGeometryUpload(command, *streamingSlot, *resources.upload,
+                                               parameters, error))
+                return std::nullopt;
+            if (!resources.upload->Seal())
+            {
+                error = "Texture sampling geometry upload could not be sealed";
+                return std::nullopt;
+            }
+        }
         VkImageMemoryBarrier2 imageBarrier{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
@@ -216,7 +237,10 @@ namespace
             .pColorAttachments = &attachment,
         };
         vkCmdBeginRendering(command, &rendering);
-        pipeline.RecordDraw(command, TargetExtent, parameters);
+        if (streamingSlot)
+            pipeline.RecordStreamedDraw(command, TargetExtent, parameters, *streamingSlot);
+        else
+            pipeline.RecordDraw(command, TargetExtent, parameters);
         vkCmdEndRendering(command);
         imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         imageBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -267,10 +291,17 @@ namespace
             .commandBufferInfoCount = 1,
             .pCommandBufferInfos = &commandInfo,
         };
+        if (resources.upload && !resources.upload->CanSubmit(1))
+        {
+            error = "Texture sampling geometry upload is not ready for submission";
+            return std::nullopt;
+        }
         const auto submitted = vkQueueSubmit2(resources.queue, 1, &submitInfo, fence);
         resources.pending = submitted == VK_SUCCESS;
         if (!NativeSuccess(submitted, "vkQueueSubmit2(texture sampling)", error))
             return std::nullopt;
+        if (resources.upload)
+            resources.upload->MarkSubmitted(1);
         const auto waited = vkWaitForFences(resources.device, 1, &fence, VK_TRUE,
                                             std::numeric_limits<std::uint64_t>::max());
         if (waited == VK_SUCCESS || waited == VK_ERROR_DEVICE_LOST)
@@ -395,4 +426,47 @@ TEST_CASE("CPU-generated mip texture samples explicit and implicit levels",
           "[vulkan][texture][mip][sampling][integration]")
 {
     VerifySampledMips(owl::vulkan::TextureMipMode::ForceCpu);
+}
+
+TEST_CASE("Streamed geometry scales texture coverage exactly once",
+          "[vulkan][texture][mip][sampling][streaming][integration]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run streamed texture sampling readback");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    VulkanTexturedQuadPipeline pipeline;
+    PipelineDrainGuard drain{pipeline, context->device->Get()};
+    const std::filesystem::path assets{OWL_TEXTURE_TEST_ASSET_DIR};
+    REQUIRE(
+        pipeline.Initialize(*context->device, *context->allocator,
+                            {assets / "texture_mips.vert.spv", assets / "texture_mips.frag.spv"},
+                            error, TextureMipMode::Generate, 2));
+    REQUIRE(pipeline.SetColorFormat(TargetFormat, error));
+
+    const auto full = DrawAndReadback(*context, pipeline, {.scale = 1.0F, .lod = 0.0F}, error, 0);
+    REQUIRE(full);
+    CHECK(PixelAt(*full, 9, 9) == Pixel{232, 53, 53, 255});
+    CHECK(PixelAt(*full, 16, 10) == Pixel{34, 41, 50, 255});
+    CHECK(PixelAt(*full, 23, 10) == Pixel{244, 247, 249, 255});
+    CHECK(PixelAt(*full, 0, 0) == Pixel{0, 0, 0, 255});
+
+    // Half scale covers [19.52,44.48] in this 64x64 target. These literal sample
+    // centers lie inside marker/dark/light texel blocks and away from their edges.
+    // (20,20) would be clear if CPU geometry and the vertex shader both scaled.
+    // Revisit slot 0 after slot 1 to exercise updating an already drawn destination.
+    for (const std::size_t slot : {1U, 0U})
+    {
+        CAPTURE(slot);
+        const auto half =
+            DrawAndReadback(*context, pipeline, {.scale = 0.5F, .lod = 0.0F}, error, slot);
+        REQUIRE(half);
+        CHECK(PixelAt(*half, 20, 20) == Pixel{232, 53, 53, 255});
+        CHECK(PixelAt(*half, 24, 20) == Pixel{34, 41, 50, 255});
+        CHECK(PixelAt(*half, 28, 20) == Pixel{244, 247, 249, 255});
+        CHECK(PixelAt(*half, 9, 9) == Pixel{0, 0, 0, 255});
+        CHECK(PixelAt(*half, 18, 18) == Pixel{0, 0, 0, 255});
+    }
 }

@@ -1,7 +1,9 @@
 #include "VulkanTexturedQuadPipeline.h"
 
+#include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 #include "VulkanShaderBinary.h"
+#include "VulkanUploadArena.h"
 #include <owl/foundation/Log.h>
 #include <owl/vulkan/VulkanTriangle.h>
 
@@ -9,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <exception>
 #include <span>
 #include <utility>
 
@@ -71,6 +74,27 @@ namespace owl::vulkan
         constexpr VkDeviceSize IndexOffset = sizeof(Vertices);
         static_assert(sizeof(Vertex) == 4 * sizeof(float));
         static_assert(IndexOffset % alignof(std::uint16_t) == 0);
+        static_assert(sizeof(Vertices) + sizeof(Indices) ==
+                      VulkanTexturedQuadPipeline::StreamedGeometryBytes);
+        constexpr VkPipelineStageFlags2 GeometryStages =
+            VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
+        constexpr VkAccessFlags2 GeometryAccess =
+            VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
+
+        std::array<std::byte, VulkanTexturedQuadPipeline::StreamedGeometryBytes>
+        MakeGeometryPayload(const float scale) noexcept
+        {
+            auto vertices = Vertices;
+            for (auto& vertex : vertices)
+            {
+                vertex.position[0] *= scale;
+                vertex.position[1] *= scale;
+            }
+            std::array<std::byte, VulkanTexturedQuadPipeline::StreamedGeometryBytes> payload{};
+            std::memcpy(payload.data(), vertices.data(), sizeof(vertices));
+            std::memcpy(payload.data() + IndexOffset, Indices.data(), sizeof(Indices));
+            return payload;
+        }
 
         bool Check(const VkResult result, const char* operation, std::string& error)
         {
@@ -124,11 +148,19 @@ namespace owl::vulkan
     bool VulkanTexturedQuadPipeline::Initialize(const VulkanDevice& device,
                                                 const VulkanAllocator& allocator,
                                                 const TriangleShaderPaths& paths,
-                                                std::string& error, const TextureMipMode mipMode)
+                                                std::string& error, const TextureMipMode mipMode,
+                                                const std::size_t streamingSlots)
     {
-        if (!device.IsValid() || device_ != VK_NULL_HANDLE)
+        if (!device.IsValid() || !allocator.IsValid() || allocator.Device() != device.Get() ||
+            device_ != VK_NULL_HANDLE)
         {
-            error = "Textured quad requires a valid device and an empty owner";
+            error = "Textured quad requires a valid device, matching allocator and an empty owner";
+            return false;
+        }
+        if (streamingSlots != 0 && mipMode != TextureMipMode::Generate &&
+            mipMode != TextureMipMode::ForceCpu)
+        {
+            error = "Geometry streaming requires generated-mip texture shaders";
             return false;
         }
         auto vertex = detail::ReadSampleSpirv(paths.vertex, error);
@@ -142,23 +174,39 @@ namespace owl::vulkan
         device_ = device.Get();
         mipLevels_ = mipMode == TextureMipMode::SingleLevel ? 1 : 7;
 
-        std::array<std::byte, sizeof(Vertices) + sizeof(Indices)> payload{};
-        std::memcpy(payload.data(), Vertices.data(), sizeof(Vertices));
-        std::memcpy(payload.data() + IndexOffset, Indices.data(), sizeof(Indices));
-        constexpr VkPipelineStageFlags2 geometryStages =
-            VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
-        constexpr VkAccessFlags2 geometryAccess =
-            VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
-        auto geometryUpload = VulkanBufferUpload::Create(
-            device, allocator, std::as_bytes(std::span{payload}),
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, geometryStages,
-            geometryAccess, error);
-        if (!geometryUpload)
-            return false;
-        geometryUpload_ = std::move(*geometryUpload);
-        if (geometryUpload_->SubmitAndWait(error) != VK_SUCCESS ||
-            WaitForUpload(error) != VK_SUCCESS)
-            return false;
+        if (streamingSlots != 0)
+        {
+            // Destinations share the frame-slot lifetime, not the startup upload lifetime.
+            // Allocate once; extent changes and ordinary frame updates retain these buffers.
+            streamedGeometry_.reserve(streamingSlots);
+            for (std::size_t slot = 0; slot < streamingSlots; ++slot)
+            {
+                auto geometry = VulkanBuffer::Create(
+                    allocator,
+                    {.size = StreamedGeometryBytes,
+                     .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     .requiredMemory = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
+                    error);
+                if (!geometry)
+                    return false;
+                streamedGeometry_.push_back(std::move(*geometry));
+            }
+        }
+        else
+        {
+            const auto payload = MakeGeometryPayload(1.0F);
+            auto geometryUpload = VulkanBufferUpload::Create(device, allocator, payload,
+                                                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                                                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                                             GeometryStages, GeometryAccess, error);
+            if (!geometryUpload)
+                return false;
+            geometryUpload_ = std::move(*geometryUpload);
+            if (geometryUpload_->SubmitAndWait(error) != VK_SUCCESS ||
+                WaitForUpload(error) != VK_SUCCESS)
+                return false;
+        }
 
         constexpr VkExtent2D imageExtent{64, 64};
         const VulkanImageDesc imageDesc{
@@ -453,9 +501,80 @@ namespace owl::vulkan
         return true;
     }
 
+    bool VulkanTexturedQuadPipeline::RecordGeometryUpload(const VkCommandBuffer command,
+                                                          const std::size_t slotIndex,
+                                                          VulkanUploadArena& arena,
+                                                          const TextureDrawParameters& parameters,
+                                                          std::string& error) const
+    {
+        if (command == VK_NULL_HANDLE || slotIndex >= streamedGeometry_.size() ||
+            !detail::IsTextureDrawParametersValid(parameters, mipLevels_))
+        {
+            error = "Geometry upload requires a command buffer, a streaming slot and valid draw "
+                    "parameters";
+            return false;
+        }
+        const auto payload = MakeGeometryPayload(parameters.scale);
+        const auto source = arena.Append(payload, alignof(float), error);
+        if (!source)
+            return false;
+
+        const auto destination = streamedGeometry_[slotIndex].Get();
+        // Order the previous draw's reads before overwriting this slot's destination.
+        // On its first use there are no prior reads, so the same dependency is harmless.
+        VkBufferMemoryBarrier2 barrier{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = GeometryStages,
+            .srcAccessMask = GeometryAccess,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+            .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = destination,
+            .offset = 0,
+            .size = StreamedGeometryBytes,
+        };
+        const VkDependencyInfo dependency{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &barrier,
+        };
+        vkCmdPipelineBarrier2(command, &dependency);
+        const VkBufferCopy copy{.srcOffset = source->offset, .dstOffset = 0, .size = source->size};
+        vkCmdCopyBuffer(command, source->buffer, destination, 1, &copy);
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = GeometryStages;
+        barrier.dstAccessMask = GeometryAccess;
+        vkCmdPipelineBarrier2(command, &dependency);
+        return true;
+    }
+
+    void VulkanTexturedQuadPipeline::RecordStreamedDraw(const VkCommandBuffer command,
+                                                        const VkExtent2D extent,
+                                                        const TextureDrawParameters& parameters,
+                                                        const std::size_t slotIndex) const noexcept
+    {
+        if (slotIndex >= streamedGeometry_.size())
+            std::terminate();
+        // Positions are already CPU-scaled. Preserve LOD but do not apply scale twice.
+        RecordDrawWithBuffer(command, extent, {.scale = 1.0F, .lod = parameters.lod},
+                             streamedGeometry_[slotIndex].Get());
+    }
+
     void
     VulkanTexturedQuadPipeline::RecordDraw(const VkCommandBuffer command, const VkExtent2D extent,
                                            const TextureDrawParameters& parameters) const noexcept
+    {
+        if (!geometry_.IsValid())
+            std::terminate(); // A static draw must never silently bind a streaming destination.
+        RecordDrawWithBuffer(command, extent, parameters, geometry_.Get());
+    }
+
+    void VulkanTexturedQuadPipeline::RecordDrawWithBuffer(const VkCommandBuffer command,
+                                                          const VkExtent2D extent,
+                                                          const TextureDrawParameters& parameters,
+                                                          const VkBuffer geometry) const noexcept
     {
         const VkViewport viewport{
             0.0F, 0.0F, static_cast<float>(extent.width), static_cast<float>(extent.height),
@@ -474,9 +593,8 @@ namespace owl::vulkan
         vkCmdSetScissor(command, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
                                 &descriptorSet_, 0, nullptr);
-        const VkBuffer buffer = geometry_.Get();
-        vkCmdBindVertexBuffers(command, 0, 1, &buffer, &vertexOffset);
-        vkCmdBindIndexBuffer(command, buffer, IndexOffset, VK_INDEX_TYPE_UINT16);
+        vkCmdBindVertexBuffers(command, 0, 1, &geometry, &vertexOffset);
+        vkCmdBindIndexBuffer(command, geometry, IndexOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command, static_cast<std::uint32_t>(Indices.size()), 1, 0, 0, 0);
     }
 } // namespace owl::vulkan

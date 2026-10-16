@@ -31,6 +31,8 @@ namespace owl::vulkan
         [[nodiscard]] PresentDecision ClassifyPresentResult(VkResult result) noexcept;
         [[nodiscard]] std::optional<std::uint64_t>
         NextSubmissionSerial(std::uint64_t submitted) noexcept;
+        [[nodiscard]] std::optional<std::uint64_t>
+        NextFrameUploadedBytes(std::uint64_t uploaded, std::uint64_t bytes) noexcept;
     } // namespace detail
 
     struct VulkanFrameSlot

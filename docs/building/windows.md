@@ -247,8 +247,19 @@ independent arenas before waiting, compare odd/aligned payloads by readback, rej
 and exhaustion, exercise pending-owner/native-parent moves, then replace/reuse completed storage.
 Live allocation counts and bytes must return to baseline. Invalid, mismatched-device and repeated
 slot initialization must leave existing storage unchanged. Native allocation/flush failures are
-not fault-injected. These are short-lived test windows; the Arena has no new Sandbox display yet.
-Renderer streaming integration is the next task. Replace `debug` with `relwithdebinfo` for that build.
+not fault-injected. These are short-lived test windows. Replace `debug` with `relwithdebinfo` for
+that build. The two mip Sandbox samples now use these arenas for per-frame geometry uploads.
+
+To check the integrated streaming path with the same GPU/validation environment:
+
+```powershell
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[frame-upload],[streaming]'
+```
+
+Expect five cases: counter overflow, invalid options, two mip-renderer lifecycle cases and an
+independent LOD-0 pixel test. The latter checks full/half-size coverage and marker/light/dark pixels,
+including reusing a geometry destination; it detects stale vertices or applying scale twice.
+The remaining 64-batch arena stress and streamed LOD-6/implicit pixel checks are a later task.
 
 ## Inspect Graphics Submission Progress
 
@@ -266,7 +277,7 @@ Expect five cases to pass. They check failed submits/waits, fence reuse, monoton
 initial no-submission state and exhaustion without wrapping to zero. No Vulkan window is needed.
 With the GPU opt-in and process-local validation environment above, the full CTest presets also
 verify progress through Clear/Triangle/Texture/mip frame loops, including minimize/restore,
-recreation, moves and both presentation modes. The current local full result is 138/138 for each
+recreation, moves and both presentation modes. The current local full result is 143/143 for each
 VS2026 configuration, without skips or validation errors/warnings.
 
 Run any Vulkan Sandbox sample, render some frames, then exit normally. Its exit log includes
@@ -311,14 +322,23 @@ the title report the actual GPU-blit or CPU-filtering path. The image contains s
 - **A** selects implicit LOD and starts a 16-second shrink/grow cycle from scale 1 to 1/128.
   Watch the reduced texture converge to its averaged color. **Space** pauses/resumes the zoom.
 - Resize/minimize/restore, then exit with Escape or close. No texture re-upload or descriptor
-  update occurs when changing the mode; only scale and LOD push constants change.
+  update occurs when changing the mode. Each submitted frame uploads 76 bytes of CPU-scaled
+  vertices/indices through that slot's arena; the shader receives scale 1 and the selected LOD.
+
+On normal exit, `frame upload capacity bytes` should be 131072 (two fixed 64 KiB arenas), and
+`frame uploaded bytes` should equal 76 times `Submitted`. Capacity counts logical staging bytes,
+not destination storage or VMA reserved memory. Startup uploads and alignment padding do not
+count toward uploaded payload bytes. Static Clear/Triangle/Texture paths report zero for both.
+The visible mip controls are unchanged; this step exercises a new geometry data path.
 
 Sampling within each level stays nearest; fractional LOD blends adjacent levels. This makes
 individual mip texels visible and avoids adding a spatial linear-filtering requirement.
 At 1x1 the asymmetric marker contributes only to the average, so it no longer appears as a tile.
 
 In RenderDoc inspect the six-index draw: set 0/binding 0, seven image/view levels, LOD clamp 0-6,
-and push-constant offsets 0/4. Capture fixed LOD 0 and 6 plus a small automatic frame and compare
+and push-constant offsets 0/4. For the mip Sandbox samples, inspect the preceding 76-byte buffer
+copy and the destination bound as both vertex and index buffer (index offset 64); push scale
+stays 1 while uploaded positions change. Capture fixed LOD 0 and 6 plus a small automatic frame and compare
 the render targets. Use the same RenderDoc version for capture and MCP replay (currently 1.43).
 
 ## Image Upload and Readback Tests

@@ -24,6 +24,7 @@ namespace owl::sandbox
         };
         options.textureMipMode = forceCpu ? owl::vulkan::TextureMipMode::ForceCpu
                                           : owl::vulkan::TextureMipMode::Generate;
+        options.streamTextureGeometry = true;
         return RunVulkanSample("Texture Mips", std::move(options));
     }
 } // namespace owl::sandbox

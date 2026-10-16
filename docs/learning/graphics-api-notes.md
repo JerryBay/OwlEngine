@@ -97,6 +97,15 @@ Upload Arena 可以把一块可映射 Buffer 划成多个上传范围：按需�
 可避免在 GPU 使用某个范围时 Flush 与它共享 atom 的另一个范围。
 参见 [VMA 缓存范围与 allocation 隔离](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/memory_mapping.html)。
 
+上传源与绘制目标有各自的使用期限。源 Buffer 的复制读取结束后，源范围才可复用；目标 Buffer
+还会被后续顶点／索引读取使用，不能仅凭复制完成就覆盖目标。让每个在途 Slot 同时拥有独立的
+上传源和几何目标，并用覆盖整次绘制提交的完成条件控制复用，是一种容易推理的起步方案。
+
+对同一 Queue 的逐帧几何更新，目标 Buffer 的访问链是“上次顶点／索引读取 → 本次 Copy 写入
+→ 本次顶点／索引读取”。前一段约束覆盖的时机，后一段让新数据对绘制可见。CPU 完成写入并按需
+Flush 后再提交，提交操作提供主机写入到设备访问的保证；这不取消目标 Buffer 上 Copy→Draw 的
+内存依赖。参见 [Khronos：上传与绘制同步示例](https://docs.vulkan.org/guide/latest/synchronization_examples.html)。
+
 Buffer 绑定对齐、上传游标对齐、索引绑定对齐与图像复制对齐是不同约束。
 `vkCmdCopyBuffer` 没有一律按四字节对齐偏移或大小的要求；应按具体消费者和命令选择规则，
 不能把某个顶点格式的对齐习惯推广到所有上传。

@@ -2,10 +2,10 @@
 
 **Date:** 2026-10-09
 
-**Status:** Tasks 1-3 CPU policies, persistent Buffer mapping, owned arenas and optional slot storage
-are implemented and verified locally on VS2026 Debug/RelWithDebInfo. Tasks 4-6 remain pending;
-the renderer does not yet enable streaming. Unchecked tasks below are planned work, not evidence
-that the feature exists or tests have passed.
+**Status:** Tasks 1-4, including streamed quad geometry in the mip samples, are implemented and
+verified locally on VS2026 Debug/RelWithDebInfo. Task 5 has renderer lifecycle and LOD-0 pixel
+coverage; its remaining stress/LOD checks and Task 6 final acceptance remain pending. Unchecked
+tasks below are planned work, not evidence that the feature exists or tests have passed.
 
 **Goal:** Reuse bounded, persistently mapped staging storage across the existing two frame slots,
 then demonstrate changing geometry through GPU copies and indexed draws without a steady-state
@@ -233,7 +233,7 @@ policies; no incomplete runtime owner is exposed by this task.
 **Delivered:** `VulkanUploadArena` composes `VulkanBuffer` and `UploadArenaState`; no duplicate
 cursor/serial bookkeeping. `CreateUploadArenas` requires completely initialized, idle slots and
 a matching allocator, creates temporary owners, then publishes all slots without replacing storage.
-Default renderer paths allocate no arenas until Task 4 opts in. Native second-allocation/flush
+Default renderer paths allocate no arenas; Task 4 opts in for both mip samples. Native second-allocation/flush
 failure cleanup was reviewed but not fault-injected; tests cover deterministic rejection paths.
 
 ### Task 4: Streamed textured-quad geometry and frame-loop integration
@@ -243,18 +243,25 @@ failure cleanup was reviewed but not fault-injected; tests cover deterministic r
 `engine/vulkan/src/VulkanTexturedQuadPipeline.{h,cpp}`,
 `samples/owl_sandbox/src/TextureSample.cpp`, `samples/owl_sandbox/src/VulkanSample.cpp`.
 
-- [ ] Add the opt-in sample option, reject incompatible options before creating Vulkan objects,
+- [x] Add the opt-in sample option, reject incompatible options before creating Vulkan objects,
   and allocate arenas/destinations only for the streaming mode.
-- [ ] Build the scaled 76-byte payload, record dependencies and copy before rendering, and bind
+- [x] Build the scaled 76-byte payload, record dependencies and copy before rendering, and bind
   the corresponding destination. Preserve the static pipeline path and scale/LOD validation.
-- [ ] Follow Section 3, including command-recording discard before arena reuse and failure after
+- [x] Follow Section 3, including command-recording discard before arena reuse and failure after
   acquire. Check invariants before submit; post-success ownership bookkeeping is non-throwing.
-- [ ] Enable streaming for the two mip Sandbox entries. Preserve 0-6/A/Space behavior and visual
+- [x] Enable streaming for the two mip Sandbox entries. Preserve 0-6/A/Space behavior and visual
   meaning; no new controls or shader assets are needed.
-- [ ] Add only two diagnostic Stats fields: `frameUploadCapacityBytes` (sum of logical slot
+- [x] Add only two diagnostic Stats fields: `frameUploadCapacityBytes` (sum of logical slot
   capacities) and `frameUploadedBytes` (payload bytes from successful submits). Report them at
   shutdown. Exclude alignment padding, startup uploads, VMA reserved blocks and failed submits;
   zero capacity/bytes identifies a non-streaming renderer. Handle counter overflow explicitly.
+
+**Delivered:** `RecordGeometryUpload` appends CPU-scaled geometry and records copy dependencies;
+the frame owner begins/seals the batch and associates its successful serial. Explicit
+`RecordStreamedDraw` binds that slot's destination and pushes scale 1; static `RecordDraw` stays
+separate. Destination count comes from `frames.slots.size()`. No per-frame allocation or new idle
+wait is introduced. CPU counter-boundary tests, renderer integration and narrow pixel evidence
+ship with this task; final control/RenderDoc acceptance and the remaining Task 5 matrix follow.
 
 ### Task 5: Independent GPU data and rendered-output evidence
 
@@ -275,7 +282,7 @@ failure cleanup was reviewed but not fault-injected; tests cover deterministic r
   Use fixed scale 1 and 0.5 with an interior pixel that changes from textured output to clear,
   plus marker/light/dark checks, explicit LOD 0/6 and implicit minification. Compute expected
   coverage independently of the production payload builder. Retain existing static sampling cases.
-- [ ] Exercise streaming GPU-generated and forced-CPU-mip renderers in both present modes,
+- [x] Exercise streaming GPU-generated and forced-CPU-mip renderers in both present modes,
   covering more than two frames, resize/minimize/restore, moves, successful WaitIdle and cleanup.
   Preserve all existing serial assertions. For bounded runs, uploaded bytes equal 76 times
   successful streaming submissions; pre-submit deferral adds none, post-submit Present deferral
@@ -362,6 +369,24 @@ unavailable, and changed live color formats remain separately reported limits.
   unverified. No new visual/RenderDoc or VS2022 acceptance is claimed.
   Logs/results: `build/diagnostics/m2c2-upload-arena-20261016/`; build logs:
   `build/m2c2-task3-*-build.log` (all ignored).
-- Next implementation task: Task 4, streamed quad geometry and renderer frame-loop integration.
+- Task 4 completed on 2026-10-16: new frame/counter/options tests first failed against scaffolding
+  (four cases, 11 assertions); the independent pixel test failed against the upload placeholder.
+  Implementation passes focused Debug checks (five cases / 14831 assertions). Both full builds and
+  opt-in CTest pass 143/143 per configuration without skips, with Khronos synchronization/submit-time
+  validation and zero validation errors/warnings. Full/half-size LOD-0 output confirms a single
+  scale application and updating both slot destinations; renderer tests cover both mip/present
+  modes, resize/minimize/restore, invalid controls, moves and successful-submit-only statistics.
+- Both formal mip samples in both configurations exited normally with code 0 and active validation.
+  All four runs report capacity 131072, completed serial = submitted serial and uploaded payload
+  = 76 * submissions. This is launch/render/normal-close evidence, not manual control/visual or
+  RenderDoc acceptance. Independent source review found no blockers. Native driver failures,
+  non-coherent hardware and VS2022 remain unverified.
+  The first RelWithDebInfo CPU-mip close probe selected an IME helper window instead of SDL.
+  Closing the identified SDL window exited with code 0 after 22818 valid submissions; a fresh
+  probe targeting the SDL window also passed. This required only a local probe correction.
+  Logs/results: `build/diagnostics/m2c2-stream-geometry-20261016/`; build logs:
+  `build/m2c2-task4-*-build.log` (all ignored).
+- Next implementation task: Task 5 remaining 64-batch data stress, stable allocation checks and
+  streamed LOD-6/implicit pixel verification, followed by Task 6 final acceptance.
 - Next slice after acceptance: resource retirement keyed to last successful graphics use, with
   runtime texture/descriptor replacement and explicit dependent-before-image destruction.

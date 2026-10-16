@@ -334,12 +334,27 @@ namespace owl::vulkan
             return SwapchainUpdateResult::Ready;
         }
 
-        bool RecordFrame(const VulkanFrameSlot& slot, const std::uint32_t imageIndex,
-                         std::string& error, const TextureDrawParameters& parameters)
+        bool RecordFrame(VulkanFrameSlot& slot, const std::uint32_t imageIndex, std::string& error,
+                         const TextureDrawParameters& parameters)
         {
+            if (slot.uploadArena &&
+                !slot.uploadArena->CanBegin(submissionProgress.CompletedSerial()))
+            {
+                failed = true;
+                failure = error = "Frame upload storage is still in use";
+                return false;
+            }
+            // Completion is checked before invalidating commands that reference the old batch.
             if (!Check(vkResetCommandPool(device.Get(), slot.commandPool, 0), "vkResetCommandPool",
                        error))
                 return false;
+            if (slot.uploadArena &&
+                !slot.uploadArena->Begin(submissionProgress.CompletedSerial(), error))
+            {
+                failed = true;
+                failure = error;
+                return false;
+            }
             const VkCommandBufferBeginInfo begin{
                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
@@ -347,6 +362,22 @@ namespace owl::vulkan
             if (!Check(vkBeginCommandBuffer(slot.commandBuffer, &begin), "vkBeginCommandBuffer",
                        error))
                 return false;
+            if (slot.uploadArena)
+            {
+                if (!texture.RecordGeometryUpload(slot.commandBuffer, frameIndex, *slot.uploadArena,
+                                                  parameters, error))
+                {
+                    failed = true;
+                    failure = error;
+                    return false;
+                }
+                if (!slot.uploadArena->Seal())
+                {
+                    failed = true;
+                    failure = error = "Frame upload batch could not be sealed";
+                    return false;
+                }
+            }
             // Match the acquire semaphore wait stage so the layout transition happens after it.
             // Discarding the previous contents does not remove this execution dependency.
             VkImageMemoryBarrier2 barrier{
@@ -387,7 +418,13 @@ namespace owl::vulkan
             if (mode == SampleMode::Triangle)
                 triangle.RecordDraw(slot.commandBuffer, swapchain.Extent());
             else if (mode == SampleMode::Texture)
-                texture.RecordDraw(slot.commandBuffer, swapchain.Extent(), parameters);
+            {
+                if (slot.uploadArena)
+                    texture.RecordStreamedDraw(slot.commandBuffer, swapchain.Extent(), parameters,
+                                               frameIndex);
+                else
+                    texture.RecordDraw(slot.commandBuffer, swapchain.Extent(), parameters);
+            }
             vkCmdEndRendering(slot.commandBuffer);
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -446,6 +483,15 @@ namespace owl::vulkan
                 owl::foundation::LogMessage(owl::foundation::LogLevel::Error, "Vulkan", error);
                 return FrameResult::Failed;
             }
+            const auto nextUploadedBytes = detail::NextFrameUploadedBytes(
+                stats.frameUploadedBytes,
+                slot.uploadArena ? VulkanTexturedQuadPipeline::StreamedGeometryBytes : 0);
+            if (!nextUploadedBytes)
+            {
+                failed = true;
+                failure = error = "Frame uploaded-byte counter exhausted";
+                return FrameResult::Failed;
+            }
             std::uint32_t imageIndex = 0;
             constexpr std::uint64_t AcquireTimeoutNs = 16'000'000;
             const VkResult acquire =
@@ -469,6 +515,16 @@ namespace owl::vulkan
             auto& image = frames.images[imageIndex];
             if (!WaitPresent(image, error) || !RecordFrame(slot, imageIndex, error, parameters))
                 return FrameResult::Failed;
+
+            const auto nextSerial =
+                detail::NextSubmissionSerial(submissionProgress.SubmittedSerial());
+            if (!submissionProgress.CanSubmit(slot) ||
+                (slot.uploadArena && (!nextSerial || !slot.uploadArena->CanSubmit(*nextSerial))))
+            {
+                failed = true;
+                failure = error = "Frame upload batch is not ready for graphics submission";
+                return FrameResult::Failed;
+            }
 
             const VkSemaphoreSubmitInfo wait{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -500,6 +556,13 @@ namespace owl::vulkan
             const auto submitResult =
                 vkQueueSubmit2(device.GraphicsQueue(), 1, &submit, slot.complete);
             submissionProgress.RecordSubmitResult(slot, submitResult);
+            if (submitResult == VK_SUCCESS)
+            {
+                // Keep successful native work owned before diagnostics or Present can fail.
+                if (slot.uploadArena)
+                    slot.uploadArena->MarkSubmitted(slot.submissionSerial);
+                stats.frameUploadedBytes = *nextUploadedBytes;
+            }
             if (!Check(submitResult, "vkQueueSubmit2", error))
                 return FrameResult::Failed;
             ++stats.submittedFrames;
@@ -551,6 +614,13 @@ namespace owl::vulkan
             error = "Cannot select triangle and texture samples simultaneously";
             return std::nullopt;
         }
+        if (options.streamTextureGeometry &&
+            (!options.textureShaders || (options.textureMipMode != TextureMipMode::Generate &&
+                                         options.textureMipMode != TextureMipMode::ForceCpu)))
+        {
+            error = "Geometry streaming requires generated-mip texture shaders";
+            return std::nullopt;
+        }
         if (options.textureMipMode != TextureMipMode::SingleLevel && !options.textureShaders)
         {
             error = "Mip generation requires the texture sample shaders";
@@ -599,9 +669,10 @@ namespace owl::vulkan
             }
             else
             {
-                if (!impl->texture.Initialize(impl->device, impl->allocator,
-                                              *options.textureShaders, error,
-                                              options.textureMipMode))
+                if (!impl->texture.Initialize(
+                        impl->device, impl->allocator, *options.textureShaders, error,
+                        options.textureMipMode,
+                        options.streamTextureGeometry ? impl->frames.slots.size() : 0))
                     return std::nullopt;
                 impl->mode = Impl::SampleMode::Texture;
                 impl->stats.textureMipLevels = impl->texture.MipLevels();
@@ -611,6 +682,14 @@ namespace owl::vulkan
         if (!impl->frames.Initialize(impl->device.Get(),
                                      *impl->device.QueueFamilies().graphicsFamily, error))
             return std::nullopt;
+        if (options.streamTextureGeometry)
+        {
+            constexpr VkDeviceSize UploadCapacityPerSlot = 64 * 1024;
+            if (!impl->frames.CreateUploadArenas(impl->allocator, UploadCapacityPerSlot, error))
+                return std::nullopt;
+            for (const auto& slot : impl->frames.slots)
+                impl->stats.frameUploadCapacityBytes += slot.uploadArena->Capacity();
+        }
         impl->stats.presentFencesEnabled = impl->device.HasPresentFences();
         impl->stats.validationEnabled = impl->instance.ValidationEnabled();
         owl::foundation::LogMessage(

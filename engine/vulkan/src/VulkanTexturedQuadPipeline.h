@@ -25,6 +25,7 @@ namespace owl::vulkan::detail
 namespace owl::vulkan
 {
     class VulkanDevice;
+    class VulkanUploadArena;
     struct TriangleShaderPaths;
 
     // Borrows Device and Allocator. Caller finishes submitted draws and drains startup uploads
@@ -39,7 +40,16 @@ namespace owl::vulkan
 
         [[nodiscard]] bool Initialize(const VulkanDevice& device, const VulkanAllocator& allocator,
                                       const TriangleShaderPaths& paths, std::string& error,
-                                      TextureMipMode mipMode = TextureMipMode::SingleLevel);
+                                      TextureMipMode mipMode = TextureMipMode::SingleLevel,
+                                      std::size_t streamingSlots = 0);
+        static constexpr VkDeviceSize StreamedGeometryBytes = 76;
+        // Caller proves this slot complete, discards old commands, then begins its arena.
+        // Records copy dependencies outside rendering. Caller seals before submit and keeps
+        // both arena and destination alive until completion; no waits occur here.
+        [[nodiscard]] bool RecordGeometryUpload(VkCommandBuffer command, std::size_t slotIndex,
+                                                VulkanUploadArena& arena,
+                                                const TextureDrawParameters& parameters,
+                                                std::string& error) const;
         [[nodiscard]] std::uint32_t MipLevels() const noexcept;
         [[nodiscard]] bool UsesGpuMipGeneration() const noexcept;
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
@@ -49,10 +59,18 @@ namespace owl::vulkan
         void MarkUploadDeviceLostForDestruction() noexcept;
         void RecordDraw(VkCommandBuffer command, VkExtent2D extent,
                         const TextureDrawParameters& parameters) const noexcept;
+        // Requires a successful RecordGeometryUpload for this slot before rendering begins.
+        void RecordStreamedDraw(VkCommandBuffer command, VkExtent2D extent,
+                                const TextureDrawParameters& parameters,
+                                std::size_t slotIndex) const noexcept;
 
     private:
+        void RecordDrawWithBuffer(VkCommandBuffer command, VkExtent2D extent,
+                                  const TextureDrawParameters& parameters,
+                                  VkBuffer geometry) const noexcept;
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanBuffer geometry_;
+        std::vector<VulkanBuffer> streamedGeometry_;
         std::optional<VulkanImage> image_;
         std::optional<VulkanImageView> view_;
         std::optional<VulkanSampler> sampler_;

@@ -37,10 +37,11 @@ readback tests. The mip sampling Demo adds fixed LOD 0-6 and automatic minificat
 generation modes; RenderDoc/MCP confirms fixed-LOD output.
 M2C-1 gives successful frame submissions stable serials and tracks fence-observed completion,
 preparing for safe reuse and retirement while frames are in flight. M2C-2 now provides CPU upload
-range/reuse policies, persistent Buffer mapping and bounded upload arenas with optional per-slot
-ownership. Both VS2026 configurations pass 138/138 opt-in tests with synchronization validation,
-including exact GPU readback, pending ownership moves and completion-gated storage reuse.
-The existing renderer does not yet enable these arenas; streamed draw integration is next. See the
+range/reuse policies, persistent Buffer mapping and bounded upload arenas with per-slot ownership.
+The two mip samples now upload CPU-scaled quad geometry each frame into separate device-local
+destinations. Both VS2026 configurations pass 143/143 opt-in tests with synchronization validation,
+including upload lifetime, frame statistics and independent streamed LOD-0 pixel checks.
+Sustained arena data stress and broader streamed LOD pixel acceptance remain next. See the
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.

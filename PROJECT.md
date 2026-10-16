@@ -13,7 +13,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2C-2 Task 3 upload arena storage and optional slot ownership are verified locally.
+- Current phase: M2 GPU resources; M2C-2 Task 4 streamed quad geometry is implemented and verified locally.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -21,8 +21,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   explicit layout transitions, generated mips and a sampled indexed quad are implemented.
   Renderer frame submissions now have stable serials and fence-observed completion. CPU policies
   for bounded upload ranges, sealing and completion-gated reuse, plus opt-in persistent Buffer
-  mapping and owned upload arenas are implemented. Slots can opt into separate arenas; renderer
-  streaming integration and runtime retirement remain next.
+  mapping and owned upload arenas are implemented. The two mip samples now stream per-slot
+  geometry; sustained upload stress, broader streamed pixel acceptance and retirement remain next.
 
 ## Implemented Baseline
 
@@ -102,8 +102,24 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     sealing freezes the batch, and successful submission serials gate reuse. Moves retain pending
     identity; no allocation growth or implicit GPU waits. `VulkanFrameResources::CreateUploadArenas`
     checks complete initialization, allocator/device identity and idle empty slots, then publishes
-    all slot allocations together. Existing renderer paths do not yet opt in.
+    all slot allocations together. Task 4 enables this only for streamed texture geometry.
+  - M2C-2 Task 4 `streamTextureGeometry`, default false, requires generated-mip texture shaders.
+    Both mip Sandbox entries enable it. Each slot retains a 64 KiB arena and a 76-byte device-local
+    destination. CPU-scaled vertex/index uploads and explicit dependencies precede Dynamic Rendering;
+    streamed draws push scale 1 and retain LOD. Existing static paths remain separate. Reuse follows
+    CanBegin -> command-pool reset -> Begin; successful submit associates the arena and counts bytes
+    before Present. Capacity and submitted payload counters are reported at normal Sandbox shutdown.
 - Verified:
+  - 2026-10-16, M2C-2 Task 4 on VS2026 Debug/RelWithDebInfo: both full builds and full opt-in CTest
+    passed 143/143 per configuration, no skips, actual Khronos synchronization/submit-time validation,
+    zero validation errors/warnings. Renderer tests cover both mip/present modes, resize/minimize,
+    invalid controls, moves and exact upload statistics. Independent streamed LOD-0 pixel readback
+    checks scale 1/0.5, marker/light/dark and reusing a destination; static sampling checks remain.
+    Both formal mip samples in both configurations exited normally with code 0, matching completed/
+    submitted serials, capacity 131072 and payload bytes = 76 * submits, with validation active.
+    Independent source review found no blockers. No new manual control/visual or RenderDoc capture
+    acceptance is claimed. Broader streamed LOD checks, sustained data stress, native fault injection,
+    non-coherent hardware and VS2022 remain unverified. See linked Task 4 diagnostics.
   - 2026-10-16, M2C-2 Task 3 on VS2026 Debug/RelWithDebInfo: both full builds and full opt-in CTest
     passed 138/138 per configuration without skips, with actual Khronos synchronization/submit-time
     validation and zero validation errors/warnings. GPU copies/readback cover odd and aligned
@@ -274,7 +290,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling, M2C-1 progress, M2C-2 bounded arenas and optional slot storage implemented; renderer streaming, retirement and M2D remain | Task 3 full CTest passes 138/138 in both configurations with synchronization validation; earlier RenderDoc output inspection remains separate evidence | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, mip sampling, submission progress and streamed per-slot quad geometry implemented; full streaming acceptance, retirement and M2D remain | Task 4 full CTest passes 143/143 in both configurations with synchronization validation and streamed LOD-0 pixel checks; earlier RenderDoc evidence predates streaming | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -320,8 +336,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     flags as well as pixel size. Surface/device loss is terminal; automatic recovery is deferred.
   - Presentation fences establish resource release, not display scanout completion. Compatibility
     fallback runs successfully locally but lacks the same specification-level release guarantee.
-  - Buffer allocation now uses VMA; uploads still block once at startup on the graphics queue.
-    Streamed/per-frame uploads, a general Shader System, and RHI remain later work.
+  - Buffer allocation uses VMA. Static geometry and textures retain blocking startup uploads;
+    streamed geometry uses the graphics queue and waits only when reusing its frame slot.
+    Runtime texture uploads/retirement, a general Shader System, and RHI remain later work.
 
 ## Entry Points and Evidence
 
@@ -336,7 +353,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   independent pixel tests in `tests/vulkan/TextureSamplingTests.cpp`.
 - Submission progress slice: `docs/superpowers/plans/2026-10-08-owlengine-m2c-submission-progress.md`;
   state-policy and real-GPU frame expectations in `tests/vulkan/FrameTests.cpp`.
-- Frame-slot upload storage plan (Tasks 1-3 verified; renderer streaming integration pending):
+- Frame-slot upload storage plan (Tasks 1-4 verified; full streaming acceptance pending):
   `docs/superpowers/plans/2026-10-09-owlengine-m2c2-frame-upload-storage.md`;
   `engine/vulkan/src/VulkanUploadArena.{h,cpp}`, `tests/vulkan/UploadArenaTests.cpp`, and
   `tests/vulkan/UploadArenaIntegrationTests.cpp`.
@@ -391,15 +408,18 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Upload arena red/green checks and both-configuration validation logs/results:
   `build/diagnostics/m2c2-upload-arena-20261016/` (local, ignored);
   build logs: `build/m2c2-task3-*-build.log`.
+- Streamed geometry red/green checks, full validation and formal Sandbox normal-close results:
+  `build/diagnostics/m2c2-stream-geometry-20261016/` (local, ignored);
+  build logs: `build/m2c2-task4-*-build.log`.
 
 ## Next Work
 
-- Next task: M2C-2 Task 4, enable per-slot streamed textured-quad geometry in the two mip samples,
-  following the linked plan. Tasks 1-3 are verified; renderer integration, sustained streaming
-  and rendered-output verification remain pending.
-  Reset/reuse only after associated submissions complete, and
-  retain separate per-slot destinations. Resource retirement follows as a separate slice.
+- Next task: M2C-2 Task 5, complete the independent 64-batch/two-slot data stress, stable allocation
+  checks and streamed LOD-6/implicit sampling pixel evidence. Task 4 already covers the renderer
+  lifecycle matrix and streamed LOD-0 full/half-size output. Task 6 final manual/RenderDoc acceptance
+  follows, then resource retirement as a separate slice. Preserve completion-gated reuse and
+  separate per-slot destinations.
   Preserve submission progress, single-mip, generated-mip readback and sampled-pixel baselines.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  per-frame uploads, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
+  upload acceptance, retirement, and the debug statistics panel remain M2C/M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

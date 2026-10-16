@@ -13,6 +13,14 @@ namespace owl::vulkan
 {
     namespace detail
     {
+        std::optional<std::uint64_t> NextFrameUploadedBytes(const std::uint64_t uploaded,
+                                                            const std::uint64_t bytes) noexcept
+        {
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - uploaded)
+                return std::nullopt;
+            return uploaded + bytes;
+        }
+
         std::optional<std::uint64_t> NextSubmissionSerial(const std::uint64_t submitted) noexcept
         {
             if (submitted == std::numeric_limits<std::uint64_t>::max())

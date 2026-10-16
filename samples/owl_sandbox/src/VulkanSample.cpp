@@ -218,7 +218,10 @@ namespace owl::sandbox
                            ", indexed draws: " + std::to_string(stats.indexedDraws) +
                            ", swapchain generation: " + std::to_string(stats.swapchainGeneration) +
                            ", submitted serial: " + std::to_string(stats.submittedSerial) +
-                           ", completed serial: " + std::to_string(stats.completedSerial));
+                           ", completed serial: " + std::to_string(stats.completedSerial) +
+                           ", frame upload capacity bytes: " +
+                           std::to_string(stats.frameUploadCapacityBytes) +
+                           ", frame uploaded bytes: " + std::to_string(stats.frameUploadedBytes));
             return 0;
         }
     } // namespace

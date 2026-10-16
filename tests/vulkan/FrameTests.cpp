@@ -152,6 +152,18 @@ TEST_CASE("Submission serial exhaustion cannot wrap to the unsubmitted sentinel"
     CHECK_FALSE(NextSubmissionSerial(std::numeric_limits<std::uint64_t>::max()));
 }
 
+TEST_CASE("Frame upload byte accounting rejects overflow before submission",
+          "[vulkan][frame-upload]")
+{
+    using owl::vulkan::detail::NextFrameUploadedBytes;
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    CHECK(NextFrameUploadedBytes(0, 76) == 76);
+    CHECK(NextFrameUploadedBytes(76, 76) == 152);
+    CHECK(NextFrameUploadedBytes(maximum - 76, 76) == maximum);
+    CHECK_FALSE(NextFrameUploadedBytes(maximum - 75, 76));
+    CHECK(NextFrameUploadedBytes(maximum, 0) == maximum);
+}
+
 TEST_CASE("A failed submit preserves a completed slot's previous serial", "[vulkan][submission]")
 {
     owl::vulkan::VulkanSubmissionProgress progress;
@@ -199,6 +211,28 @@ TEST_CASE("Renderer rejects simultaneous triangle and texture samples", "[vulkan
     CHECK(error.find("triangle and texture") != std::string::npos);
 }
 
+TEST_CASE("Geometry streaming rejects incompatible sample options before Vulkan initialization",
+          "[vulkan][frame-upload]")
+{
+    std::string error;
+    owl::platform::Window window;
+    owl::vulkan::VulkanTriangleOptions options;
+    options.streamTextureGeometry = true;
+    options.textureMipMode = owl::vulkan::TextureMipMode::Generate;
+    SECTION("clear renderer has no textured geometry") {}
+    SECTION("triangle renderer has no mip texture shader interface")
+    {
+        options.triangleShaders = owl::vulkan::TriangleShaderPaths{};
+    }
+    SECTION("single-level texture shaders have no scale and LOD interface")
+    {
+        options.textureShaders = owl::vulkan::TriangleShaderPaths{};
+        options.textureMipMode = owl::vulkan::TextureMipMode::SingleLevel;
+    }
+    CHECK_FALSE(owl::vulkan::VulkanTriangle::Create(window, error, options));
+    CHECK(error.find("stream") != std::string::npos);
+}
+
 namespace
 {
     enum class SampleMode
@@ -210,7 +244,7 @@ namespace
         TextureMipsCpu,
     };
 
-    void RunLocalFrames(const SampleMode mode)
+    void RunLocalFrames(const SampleMode mode, const bool streamGeometry = false)
     {
         const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
         if (enabled == nullptr || std::string_view{enabled} != "1")
@@ -267,20 +301,44 @@ namespace
                                              : owl::vulkan::TextureMipMode::ForceCpu;
             }
         }
+        options.streamTextureGeometry = streamGeometry;
         auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error, options);
         INFO(error);
         REQUIRE(renderer);
         REQUIRE(renderer->IsValid());
         CHECK(renderer->Stats().submittedSerial == 0);
         CHECK(renderer->Stats().completedSerial == 0);
+        const std::uint64_t expectedUploadCapacity = streamGeometry ? 2 * 64 * 1024 : 0;
+        REQUIRE(renderer->Stats().frameUploadCapacityBytes == expectedUploadCapacity);
+        CHECK(renderer->Stats().frameUploadedBytes == 0);
+        const auto checkUploadStats = [&](const owl::vulkan::VulkanTriangleStats& stats)
+        {
+            CHECK(stats.frameUploadCapacityBytes == expectedUploadCapacity);
+            // Four position/UV vertices (64 bytes) plus six uint16 indices (12 bytes).
+            CHECK(stats.frameUploadedBytes == (streamGeometry ? 76 * stats.submittedFrames : 0));
+        };
+        const auto checkInvalidDraw = [&]
+        {
+            const auto before = renderer->Stats();
+            for (const auto& parameters : {owl::vulkan::TextureDrawParameters{.scale = 0.0F},
+                                           owl::vulkan::TextureDrawParameters{.lod = 7.0F}})
+            {
+                CHECK(renderer->RenderFrame(error, parameters) == owl::vulkan::FrameResult::Failed);
+                CHECK_FALSE(error.empty());
+                CHECK(renderer->IsValid());
+                const auto after = renderer->Stats();
+                CHECK(after.submittedSerial == before.submittedSerial);
+                CHECK(after.completedSerial == before.completedSerial);
+                CHECK(after.frameUploadCapacityBytes == before.frameUploadCapacityBytes);
+                CHECK(after.frameUploadedBytes == before.frameUploadedBytes);
+            }
+        };
         if (mode == SampleMode::TextureMips || mode == SampleMode::TextureMipsCpu)
         {
             CHECK(renderer->Stats().textureMipLevels == 7);
             if (mode == SampleMode::TextureMipsCpu)
                 CHECK_FALSE(renderer->Stats().textureGpuMipGeneration);
-            CHECK(renderer->RenderFrame(error, {.lod = 7.0F}) == owl::vulkan::FrameResult::Failed);
-            CHECK_FALSE(error.empty());
-            CHECK(renderer->IsValid());
+            checkInvalidDraw();
         }
         if (!usePresentFences)
             CHECK_FALSE(renderer->Stats().presentFencesEnabled);
@@ -317,6 +375,9 @@ namespace
                 CHECK(after.submittedSerial - before.submittedSerial <= 1);
                 if (result == owl::vulkan::FrameResult::Presented)
                     CHECK(after.submittedSerial == before.submittedSerial + 1);
+                checkUploadStats(after);
+                CHECK(after.frameUploadedBytes - before.frameUploadedBytes ==
+                      (streamGeometry ? 76 * (after.submittedFrames - before.submittedFrames) : 0));
                 if (result == owl::vulkan::FrameResult::Deferred)
                     std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
@@ -324,17 +385,26 @@ namespace
             CHECK(error.empty());
         };
         renderFrames(120);
+        if (mode == SampleMode::TextureMips || mode == SampleMode::TextureMipsCpu)
+            checkInvalidDraw();
         const auto initial = renderer->Stats();
         REQUIRE(initial.indexedDraws == (mode != SampleMode::Clear ? initial.submittedFrames : 0));
         owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
         CHECK_FALSE(renderer->IsValid());
         CHECK(renderer->Stats().submittedSerial == 0);
         CHECK(renderer->Stats().completedSerial == 0);
+        CHECK(renderer->Stats().frameUploadCapacityBytes == 0);
+        CHECK(renderer->Stats().frameUploadedBytes == 0);
         CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Failed);
+        CHECK(moved.Stats().frameUploadCapacityBytes == initial.frameUploadCapacityBytes);
+        CHECK(moved.Stats().frameUploadedBytes == initial.frameUploadedBytes);
         *renderer = std::move(moved);
         CHECK_FALSE(moved.IsValid());
+        CHECK(moved.Stats().frameUploadCapacityBytes == 0);
+        CHECK(moved.Stats().frameUploadedBytes == 0);
         CHECK(renderer->Stats().submittedSerial == initial.submittedSerial);
         CHECK(renderer->Stats().completedSerial == initial.completedSerial);
+        checkUploadStats(renderer->Stats());
 
         SDL_Window* native = owl::platform::SDLWindowAccess::Get(*window);
         REQUIRE(native != nullptr);
@@ -360,10 +430,16 @@ namespace
         CHECK(renderer->Stats().submittedSerial == beforeMinimized.submittedSerial);
         CHECK(renderer->Stats().completedSerial == beforeMinimized.completedSerial);
         CHECK(renderer->Stats().swapchainGeneration == beforeMinimized.swapchainGeneration);
+        CHECK(renderer->Stats().frameUploadCapacityBytes ==
+              beforeMinimized.frameUploadCapacityBytes);
+        CHECK(renderer->Stats().frameUploadedBytes == beforeMinimized.frameUploadedBytes);
         REQUIRE(SDL_RestoreWindow(native));
         REQUIRE(SDL_SyncWindow(native));
         renderFrames(120);
+        const auto beforeIdle = renderer->Stats();
         REQUIRE(renderer->WaitIdle(error));
+        CHECK(renderer->Stats().frameUploadedBytes == beforeIdle.frameUploadedBytes);
+        checkUploadStats(renderer->Stats());
         CHECK(renderer->Stats().completedSerial == renderer->Stats().submittedSerial);
         CHECK(renderer->Stats().submittedSerial > initial.submittedSerial);
         CHECK(renderer->Stats().submittedFrames >= renderer->Stats().presentedFrames);
@@ -400,4 +476,16 @@ TEST_CASE("Vulkan CPU mip texture frames resize and recover locally",
           "[vulkan][integration][texture][mip]")
 {
     RunLocalFrames(SampleMode::TextureMipsCpu);
+}
+
+TEST_CASE("Vulkan streamed mip texture frames preserve bounded upload storage",
+          "[vulkan][integration][texture][mip][frame-upload]")
+{
+    RunLocalFrames(SampleMode::TextureMips, true);
+}
+
+TEST_CASE("Vulkan streamed CPU mip texture frames preserve bounded upload storage",
+          "[vulkan][integration][texture][mip][frame-upload]")
+{
+    RunLocalFrames(SampleMode::TextureMipsCpu, true);
 }
