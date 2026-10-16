@@ -13,15 +13,16 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2C-2 Task 1 CPU upload-range/reuse policies are verified locally.
+- Current phase: M2 GPU resources; M2C-2 Task 3 upload arena storage and optional slot ownership are verified locally.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
   synchronization validation. Private image/view/sampler resources and RGBA8 staging uploads with
   explicit layout transitions, generated mips and a sampled indexed quad are implemented.
   Renderer frame submissions now have stable serials and fence-observed completion. CPU policies
-  for bounded upload ranges, sealing and completion-gated reuse are implemented; persistent upload
-  mapping, per-frame storage/integration and runtime retirement remain next.
+  for bounded upload ranges, sealing and completion-gated reuse, plus opt-in persistent Buffer
+  mapping and owned upload arenas are implemented. Slots can opt into separate arenas; renderer
+  streaming integration and runtime retirement remain next.
 
 ## Implemented Baseline
 
@@ -90,8 +91,38 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - M2C-2 Task 1 private `detail::FindUploadRange` / `UploadArenaState`: overflow-safe aligned
     ranges, separate preview/commit, nonempty sealing, successful-submission identity, and
     completion-gated reset. This is CPU metadata only; it does not allocate GPU storage or change
-    the renderer. The future arena will compose it with its owned buffer.
+    the renderer. The Task 3 arena composes it with its owned buffer.
+  - M2C-2 Task 2 `VulkanBufferDesc::persistentMapping`, default false: opt-in VMA automatic
+    mapping retained with allocation ownership and transferred/cleared through Buffer moves.
+    Read-only `IsPersistentlyMapped()` reports the retained mapping; CPU pointers stay private.
+    Both mapping paths retain host-intent/range checks, write Flush and read Invalidate. Only
+    explicit transient maps are manually unmapped. Existing startup uploads remain transient.
+  - M2C-2 Task 3 private move-only `VulkanUploadArena`: one bounded persistent transfer-source
+    Buffer plus the existing CPU policy. Append publishes a borrowed slice only after write/flush;
+    sealing freezes the batch, and successful submission serials gate reuse. Moves retain pending
+    identity; no allocation growth or implicit GPU waits. `VulkanFrameResources::CreateUploadArenas`
+    checks complete initialization, allocator/device identity and idle empty slots, then publishes
+    all slot allocations together. Existing renderer paths do not yet opt in.
 - Verified:
+  - 2026-10-16, M2C-2 Task 3 on VS2026 Debug/RelWithDebInfo: both full builds and full opt-in CTest
+    passed 138/138 per configuration without skips, with actual Khronos synchronization/submit-time
+    validation and zero validation errors/warnings. GPU copies/readback cover odd and aligned
+    payloads, exhaustion preserving prior data, two submissions before waiting, stale-completion
+    rejection, pending arena/native-parent moves, completed replacement and reuse. Live allocation
+    counts/bytes return to baseline. Invalid/mismatched/repeated creation is rejected. Independent
+    source review found no blockers; second-allocation and native flush failures were not injected.
+    Coherent upload memory was selected; native non-coherent behavior, new visual/RenderDoc capture
+    and VS2022 remain unverified. Logs/results: the linked Task 3 diagnostics.
+  - 2026-10-16, M2C-2 Task 2 on VS2026 Debug/RelWithDebInfo: both full builds succeeded, and
+    full opt-in CTest passed 135/135 per configuration without skips. Khronos synchronization
+    and submit-time validation were actually loaded with zero validation errors/warnings.
+    Tests exercise transient/persistent mapping, repeated partial access, empty/end/overflow
+    rejection, moved-from access, cross-mode replacement, allocator-wrapper moves, live-allocation
+    release, SequentialWrite-to-GPU copy, and exact persistent readback for existing upload sizes.
+    Eight independent allocations shared one VMA block and retained isolated bytes in both modes;
+    individual allocation offsets were not queried. Mapped Random/readback flags were 14
+    (host-visible/coherent/cached); native non-coherent behavior remains unverified. No new manual
+    visual or RenderDoc acceptance was performed. Logs/results: the linked Task 2 diagnostics.
   - 2026-10-09, M2C-2 Task 1: `OwlUnitTests` target builds succeed in VS2026 Debug/RelWithDebInfo.
     New CPU tests first failed against placeholders, then passed 12 cases / 285 assertions in
     the focused Debug run. CTest covering these cases plus existing submission and buffer policies
@@ -243,7 +274,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling, M2C-1 progress, and M2C-2 CPU upload policies implemented; runtime frame uploads, retirement and M2D remain | Task 1 focused CPU CTest passes 20/20 in both configurations; last full M2C-1 baseline passed 122/122 with synchronization validation and earlier RenderDoc inspection | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A/M2B resources, uploads and mip sampling, M2C-1 progress, M2C-2 bounded arenas and optional slot storage implemented; renderer streaming, retirement and M2D remain | Task 3 full CTest passes 138/138 in both configurations with synchronization validation; earlier RenderDoc output inspection remains separate evidence | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -305,9 +336,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   independent pixel tests in `tests/vulkan/TextureSamplingTests.cpp`.
 - Submission progress slice: `docs/superpowers/plans/2026-10-08-owlengine-m2c-submission-progress.md`;
   state-policy and real-GPU frame expectations in `tests/vulkan/FrameTests.cpp`.
-- Frame-slot upload storage plan (Task 1 CPU policies verified; runtime storage pending):
+- Frame-slot upload storage plan (Tasks 1-3 verified; renderer streaming integration pending):
   `docs/superpowers/plans/2026-10-09-owlengine-m2c2-frame-upload-storage.md`;
-  `engine/vulkan/src/VulkanUploadArena.{h,cpp}` and `tests/vulkan/UploadArenaTests.cpp`.
+  `engine/vulkan/src/VulkanUploadArena.{h,cpp}`, `tests/vulkan/UploadArenaTests.cpp`, and
+  `tests/vulkan/UploadArenaIntegrationTests.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -353,12 +385,19 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   fixed/automatic output: `build/diagnostics/m2b-mip-sampling-20261008/` (local, ignored).
 - Submission progress red/green checks and both-configuration validation logs/results:
   `build/diagnostics/m2c-submission-progress-20261008/` (local, ignored).
+- Persistent Buffer mapping red/green checks and both-configuration validation logs/results:
+  `build/diagnostics/m2c2-persistent-mapping-20261016/` (local, ignored);
+  build logs: `build/m2c2-task2-*-build*.log`.
+- Upload arena red/green checks and both-configuration validation logs/results:
+  `build/diagnostics/m2c2-upload-arena-20261016/` (local, ignored);
+  build logs: `build/m2c2-task3-*-build.log`.
 
 ## Next Work
 
-- Next task: M2C-2 Task 2, opt-in persistent mapping in `VulkanBuffer`, following the linked plan.
-  Task 1 range/reuse policies are verified; actual arena storage, per-slot streamed geometry and
-  GPU verification remain pending. Reset/reuse only after associated submissions complete, and
+- Next task: M2C-2 Task 4, enable per-slot streamed textured-quad geometry in the two mip samples,
+  following the linked plan. Tasks 1-3 are verified; renderer integration, sustained streaming
+  and rendered-output verification remain pending.
+  Reset/reuse only after associated submissions complete, and
   retain separate per-slot destinations. Resource retirement follows as a separate slice.
   Preserve submission progress, single-mip, generated-mip readback and sampled-pixel baselines.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;

@@ -2,9 +2,10 @@
 
 **Date:** 2026-10-09
 
-**Status:** Task 1 CPU policies are implemented and verified locally on VS2026 Debug/RelWithDebInfo.
-Tasks 2-6 remain pending; there is no runtime upload arena or streaming integration yet. Unchecked
-tasks below are planned work, not evidence that the feature exists or tests have passed.
+**Status:** Tasks 1-3 CPU policies, persistent Buffer mapping, owned arenas and optional slot storage
+are implemented and verified locally on VS2026 Debug/RelWithDebInfo. Tasks 4-6 remain pending;
+the renderer does not yet enable streaming. Unchecked tasks below are planned work, not evidence
+that the feature exists or tests have passed.
 
 **Goal:** Reuse bounded, persistently mapped staging storage across the existing two frame slots,
 then demonstrate changing geometry through GPU copies and indexed draws without a steady-state
@@ -207,13 +208,13 @@ policies; no incomplete runtime owner is exposed by this task.
 **Files:** `engine/vulkan/src/VulkanBuffer.{h,cpp}`, `tests/vulkan/BufferTests.cpp`,
 `tests/vulkan/BufferUploadTests.cpp` as needed for the existing mapping fixtures.
 
-- [ ] Add description validation, mapping ownership, moves and the read-only mapping query.
-- [ ] Retain transient defaults and both host-intent rules; apply flush/invalidate on both paths.
-- [ ] Opt-in GPU tests exercise repeated partial writes/reads, empty operations, boundary rejection,
+- [x] Add description validation, mapping ownership, moves and the read-only mapping query.
+- [x] Retain transient defaults and both host-intent rules; apply flush/invalidate on both paths.
+- [x] Opt-in GPU tests exercise repeated partial writes/reads, empty operations, boundary rejection,
   wrong host intent, move construction, safe replacement and allocator-wrapper moves.
-- [ ] Verify independent live allocations, including a nonzero VMA allocation offset when observed,
+- [x] Verify independent live allocations, including a nonzero VMA allocation offset when observed,
   remain isolated. Return live allocation counts/bytes to baseline after releasing owners.
-- [ ] Record selected memory flags. Missing non-coherent hardware is a coverage limit; coherent
+- [x] Record selected memory flags. Missing non-coherent hardware is a coverage limit; coherent
   success must not be reported as native non-coherent validation.
 
 ### Task 3: Arena storage and frame ownership
@@ -221,13 +222,19 @@ policies; no incomplete runtime owner is exposed by this task.
 **Files:** `VulkanUploadArena.{h,cpp}`, `engine/vulkan/src/VulkanFrame.{h,cpp}`,
 `tests/vulkan/UploadArenaTests.cpp`, new `tests/vulkan/UploadArenaIntegrationTests.cpp`.
 
-- [ ] Implement bounded persistent storage, append/flush, seal and post-submit serial association.
+- [x] Implement bounded persistent storage, append/flush, seal and post-submit serial association.
   A write/flush failure returns no slice; no growing allocation or implicit idle is allowed.
-- [ ] Add conditional per-slot creation, allocator/device identity checks, and safe partial cleanup.
-- [ ] Test exhausted-arena rejection without overwriting prior ranges, independent slots, pending
+- [x] Add conditional per-slot creation, allocator/device identity checks, and safe partial cleanup.
+- [x] Test exhausted-arena rejection without overwriting prior ranges, independent slots, pending
   owner moves, safe completed replacement, and native-parent wrapper moves where supported.
-- [ ] Add a test-owned submission guard declared so it drains before GPU child owners unwind on
+- [x] Add a test-owned submission guard declared so it drains before GPU child owners unwind on
   Catch2 failure. Do not rely on `GpuContext`'s later destructor to protect earlier local children.
+
+**Delivered:** `VulkanUploadArena` composes `VulkanBuffer` and `UploadArenaState`; no duplicate
+cursor/serial bookkeeping. `CreateUploadArenas` requires completely initialized, idle slots and
+a matching allocator, creates temporary owners, then publishes all slots without replacing storage.
+Default renderer paths allocate no arenas until Task 4 opts in. Native second-allocation/flush
+failure cleanup was reviewed but not fault-injected; tests cover deterministic rejection paths.
 
 ### Task 4: Streamed textured-quad geometry and frame-loop integration
 
@@ -327,9 +334,34 @@ unavailable, and changed live color formats remain separately reported limits.
   succeed in VS2026 Debug and RelWithDebInfo. Focused CTest including the 12 new cases, five
   submission-progress cases and three buffer-policy cases passes 20/20 in each configuration,
   without skips. Formatting and diff checks pass. Logs: `build/m2c2-task1-*.log` (ignored).
-- No native Vulkan calls are made by the new policy. Persistent mapping, actual upload ownership,
-  frame integration, GPU readback/validation, full-suite regression and visual acceptance for
-  this slice remain pending. The earlier M2C-1 122/122 result is historical evidence.
-- Next implementation task: Task 2, opt-in persistent mapping in `VulkanBuffer`.
+- Task 1 adds no native Vulkan calls. Task 2 adds opt-in automatic VMA mapping in the Buffer
+  owner; Task 3 composes it with arena storage. Renderer streaming acceptance remains pending.
+- Task 2 completed on 2026-10-16: the new API first failed compilation; buildable stubs then
+  failed the CPU host-intent policy and real-GPU mapping expectations (two cases, three failed
+  assertions, exit 42). Both full VS2026 builds succeed; full opt-in CTest passes 135/135 per
+  configuration with no skips, actual Khronos synchronization/submit-time validation and zero
+  validation errors/warnings. Existing mapping/isolation/move/readback fixtures exercise both
+  lifetimes, including SequentialWrite CPU-to-GPU copy and GPU-written persistent readback.
+- Eight independent allocations shared one block and returned live counts/bytes to baseline in
+  both modes. Exact allocation offsets were not queried. Random/readback memory flags were 14
+  (visible/coherent/cached); native non-coherent cache behavior and native failure injection
+  remain unverified. No new visual/RenderDoc or VS2022 acceptance is claimed.
+- Task 2 read-only independent source review found no blocking issues; the recommended direct
+  SequentialWrite-to-GPU readback check was added. Runtime evidence is separate from that review.
+  Logs/results: `build/diagnostics/m2c2-persistent-mapping-20261016/`; build logs:
+  `build/m2c2-task2-*-build*.log` (all ignored).
+- Task 3 completed on 2026-10-16: buildable storage placeholders failed the two new GPU cases
+  (two assertions, exit 42). Implementation passed the focused Debug run (15 cases / 450
+  assertions); a final command-pool reset assertion was then added. Both full builds and full
+  opt-in CTest pass 138/138 per configuration without skips, with actual Khronos synchronization/
+  submit-time validation and zero validation errors/warnings. Readback proves odd/aligned ranges,
+  exhaustion safety, independent slots, pending moves, completed replacement and actual reuse.
+  Both native-parent wrappers move during pending use; live allocation counts/bytes return to baseline.
+- Task 3 independent source review found no blockers. Partial native allocation/flush failures
+  were not injected; coherent upload memory was selected, so non-coherent hardware remains
+  unverified. No new visual/RenderDoc or VS2022 acceptance is claimed.
+  Logs/results: `build/diagnostics/m2c2-upload-arena-20261016/`; build logs:
+  `build/m2c2-task3-*-build.log` (all ignored).
+- Next implementation task: Task 4, streamed quad geometry and renderer frame-loop integration.
 - Next slice after acceptance: resource retirement keyed to last successful graphics use, with
   runtime texture/descriptor replacement and explicit dependent-before-image destruction.

@@ -64,12 +64,43 @@ VMA 将多个资源的 allocation 放入较大的 `VkDeviceMemory` block，按�
 实际 memory type 碰巧带有 `HOST_VISIBLE` 不等于分配时已声明可映射。
 参见 [VMA：映射与缓存管理](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/memory_mapping.html)。
 
+持久映射（Persistent Mapping）让 CPU 映射在 allocation 生命周期内保持有效，适合反复写入的
+上传存储。VMA 的 `MAPPED_BIT` 返回 allocation 起始地址，并持有自动映射引用；额外调用的
+Map/Unmap 必须配对，但不能手动 Unmap 这次自动引用。资源 owner 移动时，映射地址应与 allocation
+一起转移，旧 owner 清空；这里只是移动 C++ 所有权，没有搬运显存或像素。
+
+映射长期有效不等于 CPU 与 GPU 可以同时访问同一范围。写后 Flush、读前 Invalidate 的缓存规则，
+以及 GPU 在途使用的完成条件依然存在。持久映射减少应用反复 Map/Unmap 的需要；实际性能收益
+还要测量，不能从接口调用减少直接推断帧率提升。保留受控的读写入口，可以继续检查范围和访问
+意图，避免裸指针绕过这些约束。
+
 Staging 不是所有硬件上的唯一选择。统一内存架构或 host-visible/device-local 内存可能允许直接写入；
 是否值得增加一次 Copy，需要结合 CPU 访问方式、GPU 重用频率和带宽衡量。无论选哪条路径，都不能覆盖
 GPU 仍在读取的范围；启动时阻塞上传与运行时多帧上传也需要不同的回收策略。
 
 继续深入：部分非 coherent 范围的对齐、批量上传与完成后回收，以及独立显卡和统一内存的性能取舍。
 参见 [Khronos：内存分配](https://docs.vulkan.org/guide/latest/memory_allocation.html)。
+
+### 按提交批次复用上传存储
+
+Upload Arena 可以把一块可映射 Buffer 划成多个上传范围：按需对齐并向前分配，写入和 Flush
+成功后才返回范围供命令引用。容量不足时拒绝本次请求，既有范围继续有效；固定容量换来了
+简单、可预测的生命周期，代价是调用者需要明确处理容量不足。
+
+一种简单策略是让整批范围共用一次提交和完成条件：提交前完成所有 CPU 写入，封口后停止写入，
+确认该提交完成并丢弃旧命令引用后，再把游标重置到起点。记录 Copy 命令没有保存源 Buffer 的
+数据快照，因此只重置游标、覆盖旧字节，而不检查 GPU 完成状态，会改变尚未执行的 Copy 输入。
+
+多个在途 Frame Slot 使用独立 allocation，便于把可写存储与仍被 GPU 使用的存储隔开。
+非 coherent 内存还需考虑 `nonCoherentAtomSize`：VMA 的普通 allocation 之间保留 atom 隔离，
+但同一 allocation 内自行划出的范围未必隔离。让这些范围统一在提交前写完、提交后冻结，
+可避免在 GPU 使用某个范围时 Flush 与它共享 atom 的另一个范围。
+参见 [VMA 缓存范围与 allocation 隔离](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/memory_mapping.html)。
+
+Buffer 绑定对齐、上传游标对齐、索引绑定对齐与图像复制对齐是不同约束。
+`vkCmdCopyBuffer` 没有一律按四字节对齐偏移或大小的要求；应按具体消费者和命令选择规则，
+不能把某个顶点格式的对齐习惯推广到所有上传。
+参见 [Vulkan Buffer Copy 有效性规则](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdCopyBuffer.html)。
 
 ### Image、ImageView 与 Sampler
 

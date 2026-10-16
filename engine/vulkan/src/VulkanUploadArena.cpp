@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
+#include <utility>
 
 namespace owl::vulkan::detail
 {
@@ -103,3 +104,123 @@ namespace owl::vulkan::detail
         return lastUseSerial_;
     }
 } // namespace owl::vulkan::detail
+
+namespace owl::vulkan
+{
+    VulkanUploadArena::VulkanUploadArena(VulkanUploadArena&& other) noexcept
+        : buffer_(std::move(other.buffer_)),
+          state_(std::exchange(other.state_, detail::UploadArenaState{}))
+    {
+    }
+
+    VulkanUploadArena& VulkanUploadArena::operator=(VulkanUploadArena&& other) noexcept
+    {
+        if (this != &other)
+        {
+            buffer_ = std::move(other.buffer_);
+            state_ = std::exchange(other.state_, detail::UploadArenaState{});
+        }
+        return *this;
+    }
+
+    std::optional<VulkanUploadArena> VulkanUploadArena::Create(const VulkanAllocator& allocator,
+                                                               const VkDeviceSize capacity,
+                                                               std::string& error)
+    {
+        if (!detail::IsUploadCapacityValid(capacity))
+        {
+            error = "Upload arena capacity must be nonzero and host-addressable";
+            return std::nullopt;
+        }
+        auto buffer = VulkanBuffer::Create(allocator,
+                                           {.size = capacity,
+                                            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                            .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                            .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                            .hostAccess = BufferHostAccess::SequentialWrite,
+                                            .persistentMapping = true},
+                                           error);
+        if (!buffer)
+            return std::nullopt;
+        VulkanUploadArena arena;
+        arena.buffer_ = std::move(*buffer);
+        arena.state_ = detail::UploadArenaState{capacity};
+        return arena;
+    }
+
+    bool VulkanUploadArena::IsValid() const noexcept
+    {
+        return buffer_.IsValid();
+    }
+
+    VkDeviceSize VulkanUploadArena::Capacity() const noexcept
+    {
+        return state_.Capacity();
+    }
+
+    VkDeviceSize VulkanUploadArena::UsedBytes() const noexcept
+    {
+        return state_.UsedBytes();
+    }
+
+    std::uint64_t VulkanUploadArena::LastUseSerial() const noexcept
+    {
+        return state_.LastUseSerial();
+    }
+
+    VkMemoryPropertyFlags VulkanUploadArena::MemoryProperties() const noexcept
+    {
+        return buffer_.MemoryProperties();
+    }
+
+    bool VulkanUploadArena::CanBegin(const std::uint64_t completedSerial) const noexcept
+    {
+        return IsValid() && state_.CanBegin(completedSerial);
+    }
+
+    bool VulkanUploadArena::Begin(const std::uint64_t completedSerial, std::string& error)
+    {
+        if (!IsValid() || !state_.Begin(completedSerial))
+        {
+            error = "Upload arena requires valid storage and completed prior GPU use";
+            return false;
+        }
+        error.clear();
+        return true;
+    }
+
+    std::optional<UploadSlice> VulkanUploadArena::Append(const std::span<const std::byte> bytes,
+                                                         const VkDeviceSize alignment,
+                                                         std::string& error)
+    {
+        const auto range = state_.PreviewAppend(static_cast<VkDeviceSize>(bytes.size()), alignment);
+        if (!IsValid() || !range)
+        {
+            error = "Upload append requires a writable batch, nonempty data, power-of-two "
+                    "alignment and enough remaining capacity";
+            return std::nullopt;
+        }
+        // Write performs the allocation-relative flush. Publish only after it succeeds;
+        // a failed write/flush may touch the unpublished tail but cannot advance the cursor.
+        if (!buffer_.Write(range->offset, bytes, error))
+            return std::nullopt;
+        if (!state_.CommitAppend(*range))
+            std::terminate(); // No state mutation may intervene between preview and commit.
+        return UploadSlice{buffer_.Get(), range->offset, range->size};
+    }
+
+    bool VulkanUploadArena::Seal() noexcept
+    {
+        return IsValid() && state_.Seal();
+    }
+
+    bool VulkanUploadArena::CanSubmit(const std::uint64_t serial) const noexcept
+    {
+        return IsValid() && state_.CanSubmit(serial);
+    }
+
+    void VulkanUploadArena::MarkSubmitted(const std::uint64_t serial) noexcept
+    {
+        state_.MarkSubmitted(serial);
+    }
+} // namespace owl::vulkan

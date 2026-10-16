@@ -1,6 +1,6 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include "VulkanBuffer.h"
 
 #include <cstdint>
 #include <optional>
@@ -20,7 +20,7 @@ namespace owl::vulkan::detail
                                                              VkDeviceSize alignment) noexcept;
 
     // CPU metadata for one bounded upload allocation. Owns no native resources or completion
-    // primitive. The future arena composes this policy with its buffer, rather than duplicating
+    // primitive. The arena composes this policy with its buffer, rather than duplicating
     // cursor/seal/serial bookkeeping. All calls belong to the submitting owner thread.
     class UploadArenaState
     {
@@ -63,3 +63,50 @@ namespace owl::vulkan::detail
         Phase phase_ = Phase::Idle;
     };
 } // namespace owl::vulkan::detail
+
+namespace owl::vulkan
+{
+    // Borrowed source range. Discard with its batch/command recording before the next Begin.
+    struct UploadSlice
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        VkDeviceSize size = 0;
+    };
+
+    // Bounded staging storage for one submission at a time. Borrows the native allocator.
+    // Single owner thread; no waits or implicit growth. Finish GPU use and discard command
+    // references before destruction or move replacement. Moving preserves pending identity.
+    class VulkanUploadArena
+    {
+    public:
+        VulkanUploadArena() noexcept = default;
+        VulkanUploadArena(const VulkanUploadArena&) = delete;
+        VulkanUploadArena& operator=(const VulkanUploadArena&) = delete;
+        VulkanUploadArena(VulkanUploadArena&& other) noexcept;
+        VulkanUploadArena& operator=(VulkanUploadArena&& other) noexcept;
+
+        [[nodiscard]] static std::optional<VulkanUploadArena>
+        Create(const VulkanAllocator& allocator, VkDeviceSize capacity, std::string& error);
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] VkDeviceSize Capacity() const noexcept;
+        [[nodiscard]] VkDeviceSize UsedBytes() const noexcept;
+        [[nodiscard]] std::uint64_t LastUseSerial() const noexcept;
+        [[nodiscard]] VkMemoryPropertyFlags MemoryProperties() const noexcept;
+
+        // Completion must come from the same graphics-queue progress owner. After CanBegin,
+        // discard old command recording and slices before Begin resets the writable batch.
+        [[nodiscard]] bool CanBegin(std::uint64_t completedSerial) const noexcept;
+        [[nodiscard]] bool Begin(std::uint64_t completedSerial, std::string& error);
+        [[nodiscard]] std::optional<UploadSlice> Append(std::span<const std::byte> bytes,
+                                                        VkDeviceSize alignment, std::string& error);
+        [[nodiscard]] bool Seal() noexcept;
+        [[nodiscard]] bool CanSubmit(std::uint64_t serial) const noexcept;
+        // Preflight before vkQueueSubmit2; commit its successful serial exactly once.
+        void MarkSubmitted(std::uint64_t serial) noexcept;
+
+    private:
+        VulkanBuffer buffer_;
+        detail::UploadArenaState state_;
+    };
+} // namespace owl::vulkan

@@ -3,6 +3,29 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+
+TEST_CASE("Persistent buffer mapping requires explicit host access", "[vulkan][buffer]")
+{
+    using owl::vulkan::BufferHostAccess;
+    using owl::vulkan::detail::IsBufferDescValid;
+    owl::vulkan::VulkanBufferDesc desc{
+        .size = 67,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .preferredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        .persistentMapping = true,
+    };
+    CHECK_FALSE(IsBufferDescValid(desc));
+    desc.hostAccess = BufferHostAccess::SequentialWrite;
+    CHECK_FALSE(IsBufferDescValid(desc));
+    desc.requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    CHECK(IsBufferDescValid(desc));
+    desc.hostAccess = BufferHostAccess::Random;
+    CHECK(IsBufferDescValid(desc));
+    desc.hostAccess = BufferHostAccess::None;
+    CHECK_FALSE(IsBufferDescValid(desc));
+    CHECK_FALSE(owl::vulkan::VulkanBuffer{}.IsPersistentlyMapped());
+}
+
 TEST_CASE("Buffer descriptions require explicit and consistent host access", "[vulkan][buffer]")
 {
     using owl::vulkan::BufferHostAccess;
@@ -30,10 +53,22 @@ TEST_CASE("Buffer descriptions reject unsupported allocation contracts", "[vulka
     using owl::vulkan::detail::IsBufferDescValid;
     owl::vulkan::VulkanBufferDesc desc{.size = 66, .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT};
     CHECK(IsBufferDescValid(desc));
-    SECTION("zero size") { desc.size = 0; }
-    SECTION("zero usage") { desc.usage = 0; }
-    SECTION("device address") { desc.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT; }
-    SECTION("protected memory") { desc.requiredMemory = VK_MEMORY_PROPERTY_PROTECTED_BIT; }
+    SECTION("zero size")
+    {
+        desc.size = 0;
+    }
+    SECTION("zero usage")
+    {
+        desc.usage = 0;
+    }
+    SECTION("device address")
+    {
+        desc.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    }
+    SECTION("protected memory")
+    {
+        desc.requiredMemory = VK_MEMORY_PROPERTY_PROTECTED_BIT;
+    }
     SECTION("unsupported preferred memory")
     {
         desc.preferredMemory = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;

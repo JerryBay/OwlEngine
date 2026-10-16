@@ -9,14 +9,12 @@ namespace owl::vulkan::detail
 {
     bool IsBufferDescValid(const VulkanBufferDesc& desc) noexcept
     {
-        constexpr VkBufferUsageFlags allowedUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        constexpr VkMemoryPropertyFlags allowedMemory = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                                                       VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        constexpr VkBufferUsageFlags allowedUsage =
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        constexpr VkMemoryPropertyFlags allowedMemory =
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
         if (desc.size == 0 || desc.usage == 0 || (desc.usage & ~allowedUsage) != 0 ||
             (desc.requiredMemory & ~allowedMemory) != 0 ||
             (desc.preferredMemory & ~allowedMemory) != 0)
@@ -26,7 +24,7 @@ namespace owl::vulkan::detail
         switch (desc.hostAccess)
         {
         case BufferHostAccess::None:
-            return !hostVisible;
+            return !hostVisible && !desc.persistentMapping;
         case BufferHostAccess::SequentialWrite:
         case BufferHostAccess::Random:
             return hostVisible;
@@ -59,7 +57,13 @@ namespace owl::vulkan
         {
             VmaAllocator allocator;
             VmaAllocation allocation;
-            ~MappedAllocation() { vmaUnmapMemory(allocator, allocation); }
+            bool temporary;
+            ~MappedAllocation()
+            {
+                // The automatic MAPPED_BIT reference belongs to VMA until allocation release.
+                if (temporary)
+                    vmaUnmapMemory(allocator, allocation);
+            }
         };
     } // namespace
 
@@ -75,7 +79,8 @@ namespace owl::vulkan
           size_(std::exchange(other.size_, 0)),
           allocationSize_(std::exchange(other.allocationSize_, 0)),
           memoryProperties_(std::exchange(other.memoryProperties_, 0)),
-          hostAccess_(std::exchange(other.hostAccess_, BufferHostAccess::None))
+          hostAccess_(std::exchange(other.hostAccess_, BufferHostAccess::None)),
+          mappedData_(std::exchange(other.mappedData_, nullptr))
     {
     }
 
@@ -91,6 +96,7 @@ namespace owl::vulkan
             allocationSize_ = std::exchange(other.allocationSize_, 0);
             memoryProperties_ = std::exchange(other.memoryProperties_, 0);
             hostAccess_ = std::exchange(other.hostAccess_, BufferHostAccess::None);
+            mappedData_ = std::exchange(other.mappedData_, nullptr);
         }
         return *this;
     }
@@ -127,6 +133,8 @@ namespace owl::vulkan
             allocate.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         else if (desc.hostAccess == BufferHostAccess::Random)
             allocate.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        if (desc.persistentMapping)
+            allocate.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo allocationInfo{};
         if (!Check(vmaCreateBuffer(allocator.Get(), &info, &allocate, &result.buffer_,
@@ -134,6 +142,12 @@ namespace owl::vulkan
                    "vmaCreateBuffer", error))
             return std::nullopt;
 
+        if (desc.persistentMapping && allocationInfo.pMappedData == nullptr)
+        {
+            error = "Persistent buffer mapping did not return a usable allocation address";
+            return std::nullopt;
+        }
+        result.mappedData_ = desc.persistentMapping ? allocationInfo.pMappedData : nullptr;
         result.size_ = desc.size;
         result.allocationSize_ = allocationInfo.size;
         result.hostAccess_ = desc.hostAccess;
@@ -143,13 +157,30 @@ namespace owl::vulkan
         return result;
     }
 
-    bool VulkanBuffer::IsValid() const noexcept { return buffer_ != VK_NULL_HANDLE; }
-    VkBuffer VulkanBuffer::Get() const noexcept { return buffer_; }
-    VkDeviceSize VulkanBuffer::Size() const noexcept { return size_; }
-    VkDeviceSize VulkanBuffer::AllocationSize() const noexcept { return allocationSize_; }
+    bool VulkanBuffer::IsValid() const noexcept
+    {
+        return buffer_ != VK_NULL_HANDLE;
+    }
+    VkBuffer VulkanBuffer::Get() const noexcept
+    {
+        return buffer_;
+    }
+    VkDeviceSize VulkanBuffer::Size() const noexcept
+    {
+        return size_;
+    }
+    VkDeviceSize VulkanBuffer::AllocationSize() const noexcept
+    {
+        return allocationSize_;
+    }
     VkMemoryPropertyFlags VulkanBuffer::MemoryProperties() const noexcept
     {
         return memoryProperties_;
+    }
+
+    bool VulkanBuffer::IsPersistentlyMapped() const noexcept
+    {
+        return mappedData_ != nullptr;
     }
 
     bool VulkanBuffer::Write(const VkDeviceSize offset, const std::span<const std::byte> data,
@@ -167,10 +198,12 @@ namespace owl::vulkan
             error.clear();
             return true;
         }
-        void* mapped = nullptr;
-        if (!Check(vmaMapMemory(allocator_, allocation_, &mapped), "vmaMapMemory", error))
+        void* mapped = mappedData_;
+        const bool temporary = mapped == nullptr;
+        if (temporary &&
+            !Check(vmaMapMemory(allocator_, allocation_, &mapped), "vmaMapMemory", error))
             return false;
-        const MappedAllocation mapping{allocator_, allocation_};
+        const MappedAllocation mapping{allocator_, allocation_, temporary};
         // VMA already offsets this pointer to our allocation, not the underlying memory block.
         std::memcpy(static_cast<std::byte*>(mapped) + offset, data.data(), data.size());
         if (!Check(vmaFlushAllocation(allocator_, allocation_, offset, data.size()),
@@ -195,10 +228,12 @@ namespace owl::vulkan
             error.clear();
             return true;
         }
-        void* mapped = nullptr;
-        if (!Check(vmaMapMemory(allocator_, allocation_, &mapped), "vmaMapMemory", error))
+        void* mapped = mappedData_;
+        const bool temporary = mapped == nullptr;
+        if (temporary &&
+            !Check(vmaMapMemory(allocator_, allocation_, &mapped), "vmaMapMemory", error))
             return false;
-        const MappedAllocation mapping{allocator_, allocation_};
+        const MappedAllocation mapping{allocator_, allocation_, temporary};
         if (!Check(vmaInvalidateAllocation(allocator_, allocation_, offset, data.size()),
                    "vmaInvalidateAllocation", error))
             return false;
@@ -218,5 +253,6 @@ namespace owl::vulkan
         allocationSize_ = 0;
         memoryProperties_ = 0;
         hostAccess_ = BufferHostAccess::None;
+        mappedData_ = nullptr;
     }
 } // namespace owl::vulkan

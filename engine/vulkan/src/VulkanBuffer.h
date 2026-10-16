@@ -27,6 +27,8 @@ namespace owl::vulkan
         VkMemoryPropertyFlags requiredMemory = 0;
         VkMemoryPropertyFlags preferredMemory = 0;
         BufferHostAccess hostAccess = BufferHostAccess::None;
+        // Keep a VMA-owned mapping for the allocation lifetime; CPU/GPU synchronization remains.
+        bool persistentMapping = false;
     };
 
     namespace detail
@@ -57,10 +59,10 @@ namespace owl::vulkan
         // The allocation slice size, not the containing VMA memory block size.
         [[nodiscard]] VkDeviceSize AllocationSize() const noexcept;
         [[nodiscard]] VkMemoryPropertyFlags MemoryProperties() const noexcept;
+        [[nodiscard]] bool IsPersistentlyMapped() const noexcept;
         [[nodiscard]] bool Write(VkDeviceSize offset, std::span<const std::byte> data,
-                                  std::string& error);
-        [[nodiscard]] bool Read(VkDeviceSize offset, std::span<std::byte> data,
                                  std::string& error);
+        [[nodiscard]] bool Read(VkDeviceSize offset, std::span<std::byte> data, std::string& error);
 
     private:
         void Reset() noexcept;
@@ -72,5 +74,6 @@ namespace owl::vulkan
         VkDeviceSize allocationSize_ = 0;
         VkMemoryPropertyFlags memoryProperties_ = 0;
         BufferHostAccess hostAccess_ = BufferHostAccess::None;
+        void* mappedData_ = nullptr;
     };
 } // namespace owl::vulkan

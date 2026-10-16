@@ -220,6 +220,36 @@ The ordinary build requires no shader compiler. To edit shaders, see the adjacen
 The first pipeline's [ownership and memory notes](../learning/m1-triangle.md) explain its deliberate
 limits; general shader compilation, reflection, and resource allocation systems remain later work.
 
+## Check Persistent Buffer Mapping
+
+With the same GPU opt-in and process-local validation environment used for resource tests, run:
+
+```powershell
+ctest --preset windows-vs2026-debug -R '(Buffer|buffer|Upload arena)' -V
+```
+
+Replace `debug` with `relwithdebinfo` after building that configuration. Mapping fixtures exercise
+both default transient and opt-in persistent access, partial/boundary operations, moves,
+allocation isolation/release and exact GPU copy/readback. Persistent mapping does not change
+the Sandbox image. Inspect actual Khronos layer activation
+and validation output. Coherent memory cannot establish native non-coherent cache behavior.
+
+## Check Frame-Slot Upload Storage
+
+After building, use the same GPU opt-in and validation environment:
+
+```powershell
+ctest --preset windows-vs2026-debug -R '(Upload arena|Frame upload storage)' -V
+```
+
+This runs CPU range/state checks and GPU storage tests. The latter submit copies from two
+independent arenas before waiting, compare odd/aligned payloads by readback, reject early reuse
+and exhaustion, exercise pending-owner/native-parent moves, then replace/reuse completed storage.
+Live allocation counts and bytes must return to baseline. Invalid, mismatched-device and repeated
+slot initialization must leave existing storage unchanged. Native allocation/flush failures are
+not fault-injected. These are short-lived test windows; the Arena has no new Sandbox display yet.
+Renderer streaming integration is the next task. Replace `debug` with `relwithdebinfo` for that build.
+
 ## Inspect Graphics Submission Progress
 
 Each successful renderer graphics submit receives a serial. `submittedSerial` is the latest
@@ -236,7 +266,7 @@ Expect five cases to pass. They check failed submits/waits, fence reuse, monoton
 initial no-submission state and exhaustion without wrapping to zero. No Vulkan window is needed.
 With the GPU opt-in and process-local validation environment above, the full CTest presets also
 verify progress through Clear/Triangle/Texture/mip frame loops, including minimize/restore,
-recreation, moves and both presentation modes. The current local full result is 122/122 for each
+recreation, moves and both presentation modes. The current local full result is 138/138 for each
 VS2026 configuration, without skips or validation errors/warnings.
 
 Run any Vulkan Sandbox sample, render some frames, then exit normally. Its exit log includes

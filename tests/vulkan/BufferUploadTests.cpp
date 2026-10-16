@@ -1,10 +1,11 @@
-#include "VulkanBufferUpload.h"
 #include "GpuTestContext.h"
+#include "VulkanBufferUpload.h"
 
 #include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <owl/foundation/Log.h>
 
@@ -62,8 +63,8 @@ namespace
 
     bool WaitForFence(const VkDevice device, const VkFence fence, std::string& error)
     {
-        const VkResult result = vkWaitForFences(
-            device, 1, &fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
+        const VkResult result =
+            vkWaitForFences(device, 1, &fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
         if (result == VK_SUCCESS)
             return true;
         error = "vkWaitForFences(readback) failed with VkResult " +
@@ -74,7 +75,8 @@ namespace
     bool Readback(const owl::vulkan::VulkanDevice& device,
                   const owl::vulkan::VulkanAllocator& allocator,
                   const owl::vulkan::VulkanBuffer& source, std::span<std::byte> output,
-                  VkMemoryPropertyFlags& memoryProperties, std::string& error)
+                  VkMemoryPropertyFlags& memoryProperties, std::string& error,
+                  const bool persistentMapping = false)
     {
         const owl::vulkan::VulkanBufferDesc desc{
             .size = output.size(),
@@ -82,14 +84,20 @@ namespace
             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
             .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             .hostAccess = owl::vulkan::BufferHostAccess::Random,
+            .persistentMapping = persistentMapping,
         };
         auto readback = owl::vulkan::VulkanBuffer::Create(allocator, desc, error);
         if (!readback)
             return false;
+        if (readback->IsPersistentlyMapped() != persistentMapping)
+        {
+            error = "Readback mapping mode does not match the requested lifetime";
+            return false;
+        }
         memoryProperties = readback->MemoryProperties();
-        owl::foundation::LogMessage(
-            owl::foundation::LogLevel::Info, "Vulkan",
-            "Buffer readback memory flags=" + std::to_string(memoryProperties));
+        owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
+                                    "Buffer readback memory flags=" +
+                                        std::to_string(memoryProperties));
         const auto families = device.QueueFamilies();
         if (!families.graphicsFamily)
         {
@@ -256,9 +264,9 @@ TEST_CASE("Vulkan buffer upload rejects destination transfer before completion",
     REQUIRE(context.has_value());
     REQUIRE(context->device.has_value());
     const std::array<std::byte, 1> payload{std::byte{0x42}};
-    auto upload = owl::vulkan::VulkanBufferUpload::Create(
-        *context->device, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        CopyStage, CopyRead, error);
+    auto upload = owl::vulkan::VulkanBufferUpload::Create(*context->device, *context->allocator,
+                                                          payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                          CopyStage, CopyRead, error);
     INFO(error);
     REQUIRE(upload.has_value());
     CHECK_FALSE(upload->IsPending());
@@ -267,9 +275,9 @@ TEST_CASE("Vulkan buffer upload rejects destination transfer before completion",
 
     auto otherDevice = owl::vulkan::VulkanDevice::Create(*context->selection, error);
     REQUIRE(otherDevice.has_value());
-    CHECK_FALSE(owl::vulkan::VulkanBufferUpload::Create(
-        *otherDevice, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        CopyStage, CopyRead, error));
+    CHECK_FALSE(owl::vulkan::VulkanBufferUpload::Create(*otherDevice, *context->allocator, payload,
+                                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage,
+                                                        CopyRead, error));
     CHECK(error.find("allocator belonging to its device") != std::string::npos);
 }
 
@@ -279,6 +287,8 @@ TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and 
     if (!IsGpuTestEnabled())
         SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local allocator test");
 
+    const bool persistentMapping = GENERATE(false, true);
+    CAPTURE(persistentMapping);
     std::string error;
     auto context = CreateGpuContext(error);
     INFO(error);
@@ -296,6 +306,7 @@ TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and 
             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
             .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             .hostAccess = owl::vulkan::BufferHostAccess::Random,
+            .persistentMapping = persistentMapping,
         };
         std::vector<owl::vulkan::VulkanBuffer> buffers;
         std::array<std::array<std::byte, size>, count> expected{};
@@ -303,6 +314,7 @@ TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and 
         {
             auto buffer = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
             REQUIRE(buffer.has_value());
+            REQUIRE(buffer->IsPersistentlyMapped() == persistentMapping);
             expected[index].fill(static_cast<std::byte>(index + 1));
             REQUIRE(buffer->Write(0, expected[index], error));
             buffers.push_back(std::move(*buffer));
@@ -319,15 +331,17 @@ TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and 
             "VMA isolation test: allocations=" +
                 std::to_string(active.total.statistics.allocationCount) +
                 ", blocks=" + std::to_string(active.total.statistics.blockCount) +
-                ", hostFlags=" + std::to_string(buffers.front().MemoryProperties()));
+                ", hostFlags=" + std::to_string(buffers.front().MemoryProperties()) +
+                ", persistent=" + std::to_string(persistentMapping));
         for (std::size_t index = 0; index < count; ++index)
         {
             const std::array<std::byte, 3> patch{std::byte{0xA1}, std::byte{0xB2},
-                                               static_cast<std::byte>(index)};
+                                                 static_cast<std::byte>(index)};
             REQUIRE(buffers[index].Write(5, patch, error));
             std::copy(patch.begin(), patch.end(), expected[index].begin() + 5);
             CHECK_FALSE(buffers[index].Write(size - 1, patch, error));
             CHECK(buffers[index].Write(size, {}, error));
+            CHECK(buffers[index].IsPersistentlyMapped() == persistentMapping);
         }
         for (std::size_t index = 0; index < count; ++index)
         {
@@ -338,6 +352,8 @@ TEST_CASE("Vulkan allocation mapping stays isolated through allocator moves and 
             REQUIRE(buffers[index].Read(5, partial, error));
             CHECK(std::equal(partial.begin(), partial.end(), expected[index].begin() + 5));
             CHECK_FALSE(buffers[index].Read(size - 1, partial, error));
+            CHECK(buffers[index].Read(size, {}, error));
+            CHECK(buffers[index].IsPersistentlyMapped() == persistentMapping);
         }
         *context->allocator = std::move(*movedAllocator);
         CHECK_FALSE(movedAllocator->IsValid());
@@ -355,6 +371,8 @@ TEST_CASE("Vulkan buffers enforce host intent independently of physical memory f
     if (!IsGpuTestEnabled())
         SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local allocator test");
 
+    const bool persistentMapping = GENERATE(false, true);
+    CAPTURE(persistentMapping);
     std::string error;
     auto context = CreateGpuContext(error);
     INFO(error);
@@ -373,10 +391,18 @@ TEST_CASE("Vulkan buffers enforce host intent independently of physical memory f
     desc.requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
     CHECK_FALSE(owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error));
     desc.hostAccess = owl::vulkan::BufferHostAccess::SequentialWrite;
+    desc.persistentMapping = persistentMapping;
     auto staging = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
     REQUIRE(staging.has_value());
+    REQUIRE(staging->IsPersistentlyMapped() == persistentMapping);
     REQUIRE(staging->Write(0, bytes, error));
     CHECK_FALSE(staging->Read(0, bytes, error));
+    CHECK_FALSE(staging->Read(3, {}, error));
+    std::array<std::byte, 3> copied{};
+    VkMemoryPropertyFlags readbackMemoryProperties = 0;
+    REQUIRE(Readback(*context->device, *context->allocator, *staging, copied,
+                     readbackMemoryProperties, error, persistentMapping));
+    CHECK(copied == bytes);
 
     owl::vulkan::VulkanAllocator emptyAllocator;
     CHECK_FALSE(owl::vulkan::VulkanBuffer::Create(emptyAllocator, desc, error));
@@ -387,6 +413,8 @@ TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][inte
     if (!IsGpuTestEnabled())
         SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local GPU buffer test");
 
+    const bool persistentMapping = GENERATE(false, true);
+    CAPTURE(persistentMapping);
     std::string error;
     auto context = CreateGpuContext(error);
     INFO(error);
@@ -399,38 +427,77 @@ TEST_CASE("Vulkan buffer host mapping and moves locally", "[vulkan][buffer][inte
         .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
         .preferredMemory = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         .hostAccess = owl::vulkan::BufferHostAccess::Random,
+        .persistentMapping = persistentMapping,
     };
     auto source = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
     INFO(error);
     REQUIRE(source.has_value());
+    REQUIRE(source->IsPersistentlyMapped() == persistentMapping);
     REQUIRE(source->Write(0, payload, error));
     std::vector<std::byte> actual(payload.size());
     REQUIRE(source->Read(0, actual, error));
     CHECK(actual == payload);
 
+    auto expected = payload;
+    for (const auto offset : {std::size_t{0}, std::size_t{5}, std::size_t{34}})
+    {
+        const std::array patch{std::byte{0xC3}, std::byte{0x17}, std::byte{0xE9}};
+        REQUIRE(source->Write(offset, patch, error));
+        std::copy(patch.begin(), patch.end(), expected.begin() + offset);
+        REQUIRE(source->Read(0, actual, error));
+        CHECK(actual == expected);
+        std::array<std::byte, 3> partial{};
+        REQUIRE(source->Read(offset, partial, error));
+        CHECK(partial == patch);
+    }
+    CHECK(source->Write(37, {}, error));
+    CHECK(source->Read(37, {}, error));
+    CHECK_FALSE(source->Write(38, {}, error));
+    CHECK_FALSE(source->Read(38, {}, error));
+    CHECK_FALSE(source->Write(36, std::span{expected}.first(2), error));
+    CHECK_FALSE(source->Read(36, std::span{actual}.first(2), error));
+    CHECK_FALSE(source->Write(std::numeric_limits<VkDeviceSize>::max(), {}, error));
+    CHECK_FALSE(source->Read(std::numeric_limits<VkDeviceSize>::max(), {}, error));
+
     owl::vulkan::VulkanBuffer moved{std::move(*source)};
     CHECK_FALSE(source->IsValid());
+    CHECK_FALSE(source->IsPersistentlyMapped());
+    CHECK_FALSE(source->Write(0, expected, error));
+    CHECK_FALSE(source->Read(0, actual, error));
     REQUIRE(moved.IsValid());
+    CHECK(moved.IsPersistentlyMapped() == persistentMapping);
     std::fill(actual.begin(), actual.end(), std::byte{});
     REQUIRE(moved.Read(0, actual, error));
-    CHECK(actual == payload);
+    CHECK(actual == expected);
 
-    auto replacement = owl::vulkan::VulkanBuffer::Create(*context->allocator, desc, error);
+    auto replacementDesc = desc;
+    replacementDesc.persistentMapping = !persistentMapping;
+    auto replacement =
+        owl::vulkan::VulkanBuffer::Create(*context->allocator, replacementDesc, error);
     INFO(error);
     REQUIRE(replacement.has_value());
+    CHECK(replacement->IsPersistentlyMapped() == !persistentMapping);
     *replacement = std::move(moved);
     CHECK_FALSE(moved.IsValid());
+    CHECK_FALSE(moved.IsPersistentlyMapped());
     REQUIRE(replacement->IsValid());
+    CHECK(replacement->IsPersistentlyMapped() == persistentMapping);
     std::fill(actual.begin(), actual.end(), std::byte{});
+    REQUIRE(replacement->Read(0, actual, error));
+    CHECK(actual == expected);
+    REQUIRE(replacement->Write(0, payload, error));
     REQUIRE(replacement->Read(0, actual, error));
     CHECK(actual == payload);
 }
 
-TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-upload][integration]")
+TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes",
+          "[vulkan][buffer-upload][integration]")
 {
     if (!IsGpuTestEnabled())
         SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local GPU upload test");
 
+    const bool persistentMapping = GENERATE(false, true);
+    CAPTURE(persistentMapping);
     std::string error;
     auto context = CreateGpuContext(error);
     INFO(error);
@@ -444,16 +511,15 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
         const auto payload = caseIndex == sizes.size() - 1 ? TrianglePayload() : Pattern(size);
         REQUIRE(payload.size() == size);
         auto upload = owl::vulkan::VulkanBufferUpload::Create(
-            *context->device, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, CopyStage, CopyRead,
-            error);
+            *context->device, *context->allocator, payload, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            CopyStage, CopyRead, error);
         INFO(error);
         REQUIRE(upload.has_value());
         CHECK_FALSE(upload->TakeDestination(error).has_value());
         CHECK_FALSE(error.empty());
-        owl::foundation::LogMessage(
-            owl::foundation::LogLevel::Info, "Vulkan",
-            "Buffer upload memory flags: staging=" +
-                std::to_string(upload->StagingMemoryProperties()));
+        owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
+                                    "Buffer upload memory flags: staging=" +
+                                        std::to_string(upload->StagingMemoryProperties()));
         const VkResult uploadResult = upload->SubmitAndWait(error);
         if (uploadResult != VK_SUCCESS)
         {
@@ -475,17 +541,15 @@ TEST_CASE("Vulkan buffer upload roundtrips exact byte sizes", "[vulkan][buffer-u
         std::vector<std::byte> actual(size);
         VkMemoryPropertyFlags readbackMemoryProperties = 0;
         CHECK(Readback(*context->device, *context->allocator, *destination, actual,
-                       readbackMemoryProperties, error));
+                       readbackMemoryProperties, error, persistentMapping));
         INFO(error);
         CHECK(actual == payload);
         if (destination)
         {
-            owl::foundation::LogMessage(
-                owl::foundation::LogLevel::Info, "Vulkan",
-                "Buffer upload memory flags: destination=" +
-                    std::to_string(destination->MemoryProperties()));
-            INFO("destination memory flags: " +
-                 std::to_string(destination->MemoryProperties()));
+            owl::foundation::LogMessage(owl::foundation::LogLevel::Info, "Vulkan",
+                                        "Buffer upload memory flags: destination=" +
+                                            std::to_string(destination->MemoryProperties()));
+            INFO("destination memory flags: " + std::to_string(destination->MemoryProperties()));
             INFO("readback memory flags: " + std::to_string(readbackMemoryProperties));
             INFO("non-coherent readback: " +
                  std::string{(readbackMemoryProperties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)

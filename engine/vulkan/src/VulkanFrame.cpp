@@ -1,10 +1,13 @@
 #include "VulkanFrame.h"
 
+#include "VulkanAllocator.h"
+
 #include <owl/foundation/Log.h>
 
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <utility>
 
 namespace owl::vulkan
 {
@@ -181,6 +184,40 @@ namespace owl::vulkan
                 !CreateFence(device_, 0, slot.acquired, error))
                 return false;
         }
+        initialized_ = true;
+        error.clear();
+        return true;
+    }
+
+    bool VulkanFrameResources::CreateUploadArenas(const VulkanAllocator& allocator,
+                                                  const VkDeviceSize capacity, std::string& error)
+    {
+        if (!initialized_ || !allocator.IsValid() || allocator.Device() != device_ ||
+            !detail::IsUploadCapacityValid(capacity))
+        {
+            error = "Frame upload storage requires initialized frames, a matching allocator "
+                    "and nonzero host-addressable capacity";
+            return false;
+        }
+        for (const auto& slot : slots)
+        {
+            if (slot.uploadArena || slot.submissionPending || slot.acquisitionPending)
+            {
+                error = "Frame upload storage requires idle slots without existing arenas";
+                return false;
+            }
+        }
+        // Keep slot ownership unchanged if any allocation fails. These temporary arenas have
+        // never been submitted, so unwinding can release them without waiting for the GPU.
+        std::array<std::optional<VulkanUploadArena>, std::tuple_size_v<decltype(slots)>> arenas;
+        for (auto& arena : arenas)
+        {
+            arena = VulkanUploadArena::Create(allocator, capacity, error);
+            if (!arena)
+                return false;
+        }
+        for (std::size_t index = 0; index < slots.size(); ++index)
+            slots[index].uploadArena = std::move(arenas[index]);
         error.clear();
         return true;
     }

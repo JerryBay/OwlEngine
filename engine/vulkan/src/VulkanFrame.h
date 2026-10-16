@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VulkanUploadArena.h"
+
 #include <vulkan/vulkan.h>
 
 #include <array>
@@ -43,6 +45,8 @@ namespace owl::vulkan
         bool acquisitionPending = false;
         // Last graphics submission associated with complete; zero means never submitted.
         std::uint64_t submissionSerial = 0;
+        // Allocated only when the submitting owner opts into streamed uploads.
+        std::optional<VulkanUploadArena> uploadArena;
     };
 
     // CPU bookkeeping for one renderer's graphics queue, not a GPU semaphore or WSI proof.
@@ -82,6 +86,10 @@ namespace owl::vulkan
 
         [[nodiscard]] bool Initialize(VkDevice device, std::uint32_t graphicsFamily,
                                       std::string& error);
+        // Matching allocator must outlive these slots. All slots must be initialized, idle
+        // and without storage; failure leaves every slot unchanged.
+        [[nodiscard]] bool CreateUploadArenas(const VulkanAllocator& allocator,
+                                              VkDeviceSize capacity, std::string& error);
         [[nodiscard]] bool CreatePresentResources(std::size_t imageCount, bool presentFences,
                                                   std::string& error);
         void ResetPresentResources() noexcept;
@@ -90,5 +98,6 @@ namespace owl::vulkan
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        bool initialized_ = false;
     };
 } // namespace owl::vulkan
