@@ -7,10 +7,13 @@
 #include <owl/foundation/Log.h>
 
 #include <array>
+#include <cstdint>
 #include <exception>
 #include <limits>
+#include <span>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -113,6 +116,31 @@ namespace
                                             std::numeric_limits<std::uint64_t>::max());
         progress.RecordWaitResult(slot, result);
         REQUIRE(result == VK_SUCCESS);
+    }
+
+    struct StressBatch
+    {
+        std::array<std::vector<std::byte>, 3> ranges;
+        std::vector<std::byte> expected;
+        std::array<VkDeviceSize, 3> alignments{1, 8, 16};
+    };
+
+    StressBatch MakeStressBatch(const std::size_t batch)
+    {
+        StressBatch result;
+        const std::array<std::size_t, 3> sizes{3 + (batch % 5) * 2, 8, 17 + (batch % 7) * 2};
+        for (std::size_t range = 0; range < result.ranges.size(); ++range)
+        {
+            auto& bytes = result.ranges[range];
+            bytes.resize(sizes[range]);
+            for (std::size_t index = 0; index < bytes.size(); ++index)
+            {
+                const auto value = (batch * 53U + range * 29U + index * 7U + 3U) & 0xffU;
+                bytes[index] = static_cast<std::byte>(value);
+            }
+            result.expected.insert(result.expected.end(), bytes.begin(), bytes.end());
+        }
+        return result;
     }
 } // namespace
 
@@ -342,4 +370,138 @@ TEST_CASE("Upload arenas preserve GPU payloads across exhaustion pending moves a
     }
     CHECK(AllocationStatistics(movedAllocator).allocationCount == baseline.allocationCount);
     CHECK(AllocationStatistics(movedAllocator).allocationBytes == baseline.allocationBytes);
+}
+
+TEST_CASE("Upload arenas preserve deterministic payloads across 64 dual-slot submissions",
+          "[vulkan][upload-arena][gpu][stress]")
+{
+    if (!owl::tests::IsGpuTestEnabled())
+        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to enable GPU tests");
+    std::string error;
+    auto context = owl::tests::CreateGpuContext(error);
+    INFO(error);
+    REQUIRE(context);
+    const auto device = context->device->Get();
+    const auto queue = context->device->GraphicsQueue();
+    const auto baseline = AllocationStatistics(*context->allocator);
+    constexpr VkDeviceSize arenaCapacity = 256;
+    constexpr std::size_t batchCount = 64;
+
+    {
+        VulkanFrameResources frames;
+        REQUIRE(frames.Initialize(device, *context->device->QueueFamilies().graphicsFamily, error));
+        REQUIRE(frames.CreateUploadArenas(*context->allocator, arenaCapacity, error));
+        std::array<std::optional<VulkanBuffer>, 2> readbacks;
+        for (auto& readback : readbacks)
+        {
+            readback = VulkanBuffer::Create(*context->allocator,
+                                            {.size = arenaCapacity,
+                                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                             .requiredMemory = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                             .hostAccess = BufferHostAccess::Random,
+                                             .persistentMapping = true},
+                                            error);
+            REQUIRE(readback);
+        }
+
+        VulkanSubmissionProgress progress;
+        SubmissionDrainGuard guard{device, queue, frames, progress};
+        const auto steadyAllocations = AllocationStatistics(*context->allocator);
+        std::array<std::vector<std::byte>, 2> expected;
+        std::array<VkBuffer, 2> sourceIdentity{};
+        std::array<std::uint64_t, 2> staleCompletion{};
+        std::array<bool, 2> hasIdentity{};
+
+        for (std::size_t batch = 0; batch < batchCount; ++batch)
+        {
+            const auto slotIndex = batch % frames.slots.size();
+            auto& slot = frames.slots[slotIndex];
+            REQUIRE(slot.uploadArena);
+
+            if (slot.submissionPending)
+            {
+                // This is deliberately the completion observed before the current batch was
+                // submitted. It must not release the still-owned source range.
+                const auto fenceStatus = vkGetFenceStatus(device, slot.complete);
+                CHECK((fenceStatus == VK_SUCCESS || fenceStatus == VK_NOT_READY));
+                const auto usedBeforeStaleBegin = slot.uploadArena->UsedBytes();
+                const auto serialBeforeStaleBegin = slot.uploadArena->LastUseSerial();
+                std::string staleError;
+                CHECK_FALSE(slot.uploadArena->Begin(staleCompletion[slotIndex], staleError));
+                CHECK_FALSE(staleError.empty());
+                CHECK(slot.uploadArena->UsedBytes() == usedBeforeStaleBegin);
+                CHECK(slot.uploadArena->LastUseSerial() == serialBeforeStaleBegin);
+                CHECK_FALSE(slot.uploadArena->CanBegin(staleCompletion[slotIndex]));
+                WaitForSlot(device, slot, progress);
+                // GPU completion is now certain. An obsolete caller-supplied serial must
+                // still reject reuse; readiness comes from the supplied progress evidence.
+                staleError.clear();
+                CHECK_FALSE(slot.uploadArena->Begin(staleCompletion[slotIndex], staleError));
+                CHECK_FALSE(staleError.empty());
+                CHECK(slot.uploadArena->UsedBytes() == usedBeforeStaleBegin);
+                CHECK(slot.uploadArena->LastUseSerial() == serialBeforeStaleBegin);
+                CHECK(slot.uploadArena->CanBegin(progress.CompletedSerial()));
+                REQUIRE_FALSE(expected[slotIndex].empty());
+                std::vector<std::byte> actual(expected[slotIndex].size());
+                REQUIRE(readbacks[slotIndex]->Read(0, actual, error));
+                CHECK(actual == expected[slotIndex]);
+                REQUIRE(vkResetCommandPool(device, slot.commandPool, 0) == VK_SUCCESS);
+            }
+
+            staleCompletion[slotIndex] = progress.CompletedSerial();
+            REQUIRE(slot.uploadArena->Begin(progress.CompletedSerial(), error));
+            const auto payload = MakeStressBatch(batch);
+            std::array<UploadSlice, 3> slices{};
+            for (std::size_t range = 0; range < payload.ranges.size(); ++range)
+            {
+                const auto slice = slot.uploadArena->Append(payload.ranges[range],
+                                                            payload.alignments[range], error);
+                REQUIRE(slice);
+                slices[range] = *slice;
+            }
+            REQUIRE(slot.uploadArena->Seal());
+            REQUIRE(slot.uploadArena->UsedBytes() <= arenaCapacity);
+            if (!hasIdentity[slotIndex])
+            {
+                sourceIdentity[slotIndex] = slices.front().buffer;
+                hasIdentity[slotIndex] = true;
+            }
+            else
+            {
+                CHECK(slices.front().buffer == sourceIdentity[slotIndex]);
+            }
+
+            // The first two iterations are submitted before either fence is waited. Every
+            // later iteration waits only when reusing its own slot; no steady-state idle wait.
+            CopyAndSubmit(device, queue, slot, progress, slices, *readbacks[slotIndex]);
+            CHECK_FALSE(slot.uploadArena->CanBegin(staleCompletion[slotIndex]));
+            expected[slotIndex] = payload.expected;
+            CHECK(slot.uploadArena->Capacity() == arenaCapacity);
+            // Check live allocations separately from VMA's reserved/cached blocks.
+            const auto activeAllocations = AllocationStatistics(*context->allocator);
+            CHECK(activeAllocations.allocationCount == steadyAllocations.allocationCount);
+            CHECK(activeAllocations.allocationBytes == steadyAllocations.allocationBytes);
+        }
+
+        for (std::size_t slotIndex = 0; slotIndex < frames.slots.size(); ++slotIndex)
+        {
+            auto& slot = frames.slots[slotIndex];
+            REQUIRE(slot.submissionPending);
+            WaitForSlot(device, slot, progress);
+            std::vector<std::byte> actual(expected[slotIndex].size());
+            REQUIRE(readbacks[slotIndex]->Read(0, actual, error));
+            CHECK(actual == expected[slotIndex]);
+            CHECK(slot.uploadArena->CanBegin(progress.CompletedSerial()));
+        }
+        CHECK(progress.SubmittedSerial() == batchCount);
+        CHECK(progress.CompletedSerial() == batchCount);
+        for (const auto& slot : frames.slots)
+        {
+            REQUIRE(slot.uploadArena);
+            CHECK(slot.uploadArena->Capacity() == arenaCapacity);
+            CHECK_FALSE(slot.submissionPending);
+        }
+    }
+    CHECK(AllocationStatistics(*context->allocator).allocationCount == baseline.allocationCount);
+    CHECK(AllocationStatistics(*context->allocator).allocationBytes == baseline.allocationBytes);
 }

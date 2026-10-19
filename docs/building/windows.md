@@ -253,13 +253,14 @@ that build. The two mip Sandbox samples now use these arenas for per-frame geome
 To check the integrated streaming path with the same GPU/validation environment:
 
 ```powershell
-./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[frame-upload],[streaming]'
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[frame-upload],[upload-arena][stress],[streaming]'
 ```
 
-Expect five cases: counter overflow, invalid options, two mip-renderer lifecycle cases and an
-independent LOD-0 pixel test. The latter checks full/half-size coverage and marker/light/dark pixels,
-including reusing a geometry destination; it detects stale vertices or applying scale twice.
-The remaining 64-batch arena stress and streamed LOD-6/implicit pixel checks are a later task.
+Expect seven cases: four frame-upload cases, one 64-batch dual-slot stress case and two streamed pixel cases.
+The stress case verifies distinct aligned/odd payloads by GPU readback, stale completion rejection,
+stable source handles/capacity/allocation count and cleanup to the VMA baseline. The pixel cases
+cover full/half-size geometry, explicit LOD 0/6 and implicit minification for both GPU-generated and
+CPU-generated mips. Validation must report no errors or warnings.
 
 ## Inspect Graphics Submission Progress
 
@@ -277,7 +278,7 @@ Expect five cases to pass. They check failed submits/waits, fence reuse, monoton
 initial no-submission state and exhaustion without wrapping to zero. No Vulkan window is needed.
 With the GPU opt-in and process-local validation environment above, the full CTest presets also
 verify progress through Clear/Triangle/Texture/mip frame loops, including minimize/restore,
-recreation, moves and both presentation modes. The current local full result is 143/143 for each
+recreation, moves and both presentation modes. The current local full result is 145/145 for each
 VS2026 configuration, without skips or validation errors/warnings.
 
 Run any Vulkan Sandbox sample, render some frames, then exit normally. Its exit log includes

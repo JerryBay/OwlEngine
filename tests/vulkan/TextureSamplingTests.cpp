@@ -414,6 +414,91 @@ namespace
         CHECK(differsFromBase);
         CHECK(PixelAt(*implicit, 29, 29) == Pixel{0, 0, 0, 255});
     }
+
+    void VerifyStreamedGeometrySamples(const TextureMipMode mode)
+    {
+        if (!owl::tests::IsGpuTestEnabled())
+            SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run streamed texture sampling readback");
+        std::string error;
+        auto context = owl::tests::CreateGpuContext(error);
+        INFO(error);
+        REQUIRE(context);
+        VulkanTexturedQuadPipeline pipeline;
+        PipelineDrainGuard drain{pipeline, context->device->Get()};
+        const std::filesystem::path assets{OWL_TEXTURE_TEST_ASSET_DIR};
+        REQUIRE(pipeline.Initialize(
+            *context->device, *context->allocator,
+            {assets / "texture_mips.vert.spv", assets / "texture_mips.frag.spv"}, error, mode, 2));
+        REQUIRE(pipeline.SetColorFormat(TargetFormat, error));
+
+        const auto full =
+            DrawAndReadback(*context, pipeline, {.scale = 1.0F, .lod = 0.0F}, error, 0);
+        REQUIRE(full);
+        CHECK(PixelAt(*full, 9, 9) == Pixel{232, 53, 53, 255});
+        CHECK(PixelAt(*full, 16, 10) == Pixel{34, 41, 50, 255});
+        CHECK(PixelAt(*full, 23, 10) == Pixel{244, 247, 249, 255});
+        CHECK(PixelAt(*full, 0, 0) == Pixel{0, 0, 0, 255});
+
+        const auto streamedLevel6 =
+            DrawAndReadback(*context, pipeline, {.scale = 1.0F, .lod = 6.0F}, error, 1);
+        REQUIRE(streamedLevel6);
+        constexpr Pixel fullAverage{139, 141, 146, 255};
+        for (const auto [x, y] :
+             {std::pair{9U, 9U}, std::pair{16U, 10U}, std::pair{23U, 10U}, std::pair{48U, 48U}})
+        {
+            CAPTURE(x, y, PixelAt(*streamedLevel6, x, y));
+            CHECK(NearPixel(PixelAt(*streamedLevel6, x, y), fullAverage, 2));
+        }
+
+        // Four framebuffer pixels span all 64 texels: dUV/dPixel * 64 = 16,
+        // so implicit minification chooses log2(16) = LOD 4. Compare the streamed
+        // path against explicit LOD 4 and LOD 0 at the same minified geometry.
+        constexpr float minifiedScale = 4.0F / (0.78F * static_cast<float>(TargetExtent.width));
+        const auto streamedImplicit =
+            DrawAndReadback(*context, pipeline, {.scale = minifiedScale}, error, 0);
+        REQUIRE(streamedImplicit);
+        const auto streamedExplicit4 =
+            DrawAndReadback(*context, pipeline, {.scale = minifiedScale, .lod = 4.0F}, error, 1);
+        REQUIRE(streamedExplicit4);
+        const auto streamedBaseOnly =
+            DrawAndReadback(*context, pipeline, {.scale = minifiedScale, .lod = 0.0F}, error, 0);
+        REQUIRE(streamedBaseOnly);
+        bool streamedDiffersFromBase = false;
+        for (std::size_t y = 30; y < 34; ++y)
+        {
+            for (std::size_t x = 30; x < 34; ++x)
+            {
+                const auto actual = PixelAt(*streamedImplicit, x, y);
+                CAPTURE(x, y, actual);
+                CHECK(actual[3] == 255);
+                CHECK(actual[0] >= 130);
+                CHECK(actual[0] <= 145);
+                CHECK(NearPixel(actual, PixelAt(*streamedExplicit4, x, y), 2));
+                streamedDiffersFromBase = streamedDiffersFromBase ||
+                                          !NearPixel(actual, PixelAt(*streamedBaseOnly, x, y), 16);
+            }
+        }
+        CHECK(streamedDiffersFromBase);
+        CHECK(PixelAt(*streamedImplicit, 29, 29) == Pixel{0, 0, 0, 255});
+
+        // Half scale covers [19.52,44.48] in this 64x64 target. These literal sample
+        // centers lie inside marker/dark/light texel blocks and away from their edges.
+        // (20,20) would be clear if CPU geometry and the vertex shader both scaled.
+        // Revisit slot 0 after slot 1 to exercise updating an already drawn destination.
+        for (const std::size_t slot : {1U, 0U})
+        {
+            CAPTURE(slot);
+            const auto half =
+                DrawAndReadback(*context, pipeline, {.scale = 0.5F, .lod = 0.0F}, error, slot);
+            REQUIRE(half);
+            CHECK(PixelAt(*half, 20, 20) == Pixel{232, 53, 53, 255});
+            CHECK(PixelAt(*half, 24, 20) == Pixel{34, 41, 50, 255});
+            CHECK(PixelAt(*half, 28, 20) == Pixel{244, 247, 249, 255});
+            CHECK(PixelAt(*half, 9, 9) == Pixel{0, 0, 0, 255});
+            CHECK(PixelAt(*half, 18, 18) == Pixel{0, 0, 0, 255});
+        }
+    }
+
 } // namespace
 
 TEST_CASE("Automatically generated mip texture samples explicit and implicit levels",
@@ -428,45 +513,14 @@ TEST_CASE("CPU-generated mip texture samples explicit and implicit levels",
     VerifySampledMips(owl::vulkan::TextureMipMode::ForceCpu);
 }
 
-TEST_CASE("Streamed geometry scales texture coverage exactly once",
+TEST_CASE("Automatically generated streamed geometry covers explicit and implicit levels",
           "[vulkan][texture][mip][sampling][streaming][integration]")
 {
-    if (!owl::tests::IsGpuTestEnabled())
-        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run streamed texture sampling readback");
-    std::string error;
-    auto context = owl::tests::CreateGpuContext(error);
-    INFO(error);
-    REQUIRE(context);
-    VulkanTexturedQuadPipeline pipeline;
-    PipelineDrainGuard drain{pipeline, context->device->Get()};
-    const std::filesystem::path assets{OWL_TEXTURE_TEST_ASSET_DIR};
-    REQUIRE(
-        pipeline.Initialize(*context->device, *context->allocator,
-                            {assets / "texture_mips.vert.spv", assets / "texture_mips.frag.spv"},
-                            error, TextureMipMode::Generate, 2));
-    REQUIRE(pipeline.SetColorFormat(TargetFormat, error));
+    VerifyStreamedGeometrySamples(TextureMipMode::Generate);
+}
 
-    const auto full = DrawAndReadback(*context, pipeline, {.scale = 1.0F, .lod = 0.0F}, error, 0);
-    REQUIRE(full);
-    CHECK(PixelAt(*full, 9, 9) == Pixel{232, 53, 53, 255});
-    CHECK(PixelAt(*full, 16, 10) == Pixel{34, 41, 50, 255});
-    CHECK(PixelAt(*full, 23, 10) == Pixel{244, 247, 249, 255});
-    CHECK(PixelAt(*full, 0, 0) == Pixel{0, 0, 0, 255});
-
-    // Half scale covers [19.52,44.48] in this 64x64 target. These literal sample
-    // centers lie inside marker/dark/light texel blocks and away from their edges.
-    // (20,20) would be clear if CPU geometry and the vertex shader both scaled.
-    // Revisit slot 0 after slot 1 to exercise updating an already drawn destination.
-    for (const std::size_t slot : {1U, 0U})
-    {
-        CAPTURE(slot);
-        const auto half =
-            DrawAndReadback(*context, pipeline, {.scale = 0.5F, .lod = 0.0F}, error, slot);
-        REQUIRE(half);
-        CHECK(PixelAt(*half, 20, 20) == Pixel{232, 53, 53, 255});
-        CHECK(PixelAt(*half, 24, 20) == Pixel{34, 41, 50, 255});
-        CHECK(PixelAt(*half, 28, 20) == Pixel{244, 247, 249, 255});
-        CHECK(PixelAt(*half, 9, 9) == Pixel{0, 0, 0, 255});
-        CHECK(PixelAt(*half, 18, 18) == Pixel{0, 0, 0, 255});
-    }
+TEST_CASE("CPU-generated streamed geometry covers explicit and implicit levels",
+          "[vulkan][texture][mip][sampling][streaming][integration]")
+{
+    VerifyStreamedGeometrySamples(TextureMipMode::ForceCpu);
 }

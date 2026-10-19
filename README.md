@@ -39,9 +39,10 @@ M2C-1 gives successful frame submissions stable serials and tracks fence-observe
 preparing for safe reuse and retirement while frames are in flight. M2C-2 now provides CPU upload
 range/reuse policies, persistent Buffer mapping and bounded upload arenas with per-slot ownership.
 The two mip samples now upload CPU-scaled quad geometry each frame into separate device-local
-destinations. Both VS2026 configurations pass 143/143 opt-in tests with synchronization validation,
-including upload lifetime, frame statistics and independent streamed LOD-0 pixel checks.
-Sustained arena data stress and broader streamed LOD pixel acceptance remain next. See the
+destinations. Both VS2026 configurations pass 145/145 opt-in tests with synchronization validation,
+including dual-slot upload stress, stale-completion rejection, stable allocation behavior and
+independent streamed LOD 0/6/implicit pixel checks for both GPU and CPU mip generation. Final manual
+controls and RenderDoc acceptance remain next. See the
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.

@@ -2,10 +2,10 @@
 
 **Date:** 2026-10-09
 
-**Status:** Tasks 1-4, including streamed quad geometry in the mip samples, are implemented and
-verified locally on VS2026 Debug/RelWithDebInfo. Task 5 has renderer lifecycle and LOD-0 pixel
-coverage; its remaining stress/LOD checks and Task 6 final acceptance remain pending. Unchecked
-tasks below are planned work, not evidence that the feature exists or tests have passed.
+**Status:** Tasks 1-5, including streamed quad geometry, independent dual-slot stress and streamed
+mip output evidence, are implemented and verified locally on VS2026 Debug/RelWithDebInfo. Task 6
+final manual/RenderDoc acceptance remains pending. Unchecked tasks below are planned work, not
+evidence that the feature exists or tests have passed.
 
 **Goal:** Reuse bounded, persistently mapped staging storage across the existing two frame slots,
 then demonstrate changing geometry through GPU copies and indexed draws without a steady-state
@@ -269,16 +269,16 @@ ship with this task; final control/RenderDoc acceptance and the remaining Task 5
 `tests/vulkan/TextureSamplingTests.cpp`, `tests/vulkan/TexturePipelineTests.cpp`,
 `tests/CMakeLists.txt`.
 
-- [ ] Submit 64 deterministic batches through two slots. Submit both before waiting to reuse the
+- [x] Submit 64 deterministic batches through two slots. Submit both before waiting to reuse the
   first; use distinct payloads per iteration and several aligned/odd-sized ranges per batch.
   Do not require both fences to remain unsignaled on a fast GPU.
-- [ ] Copy into test-owned per-slot readback storage, insert transfer-write -> host-read barriers,
+- [x] Copy into test-owned per-slot readback storage, insert transfer-write -> host-read barriers,
   and compare every byte after that slot's fence succeeds and readback invalidates. Compare
   before overwriting the slot's prior result; drain the final two batches too. No steady-state
   queue/device-idle waits or submit-and-immediately-wait helper may serialize the test.
-- [ ] Try reuse with stale observed completion and verify local rejection without modifying the
+- [x] Try reuse with stale observed completion and verify local rejection without modifying the
   still-owned batch, even if the hardware has already finished. Validate success after observation.
-- [ ] Extend independent offscreen sampled-pixel checks to consume production streamed geometry.
+- [x] Extend independent offscreen sampled-pixel checks to consume production streamed geometry.
   Use fixed scale 1 and 0.5 with an interior pixel that changes from textured output to clear,
   plus marker/light/dark checks, explicit LOD 0/6 and implicit minification. Compute expected
   coverage independently of the production payload builder. Retain existing static sampling cases.
@@ -287,7 +287,7 @@ ship with this task; final control/RenderDoc acceptance and the remaining Task 5
   Preserve all existing serial assertions. For bounded runs, uploaded bytes equal 76 times
   successful streaming submissions; pre-submit deferral adds none, post-submit Present deferral
   still counts. Capacity remains fixed across extent-only recreation.
-- [ ] Confirm stable buffer identity/capacity and allocation counts during reuse, then return live
+- [x] Confirm stable buffer identity/capacity and allocation counts during reuse, then return live
   allocation counts/bytes to baseline after drain/destruction. VMA reserved blocks are separate.
 
 ### Task 6: Local acceptance and documentation
@@ -295,8 +295,8 @@ ship with this task; final control/RenderDoc acceptance and the remaining Task 5
 **Files:** `PROJECT.md`, `README.md`, `docs/building/windows.md`,
 `docs/learning/graphics-api-notes.md`, and this plan's verification section.
 
-- [ ] Format touched C++, build VS2026 Debug and RelWithDebInfo, and run the focused CPU/GPU cases.
-- [ ] Run each full CTest preset with GPU opt-in and actual Khronos synchronization/submit-time
+- [x] Format touched C++, build VS2026 Debug and RelWithDebInfo, and run the focused CPU/GPU cases.
+- [x] Run each full CTest preset with GPU opt-in and actual Khronos synchronization/submit-time
   validation. Require no skips for this acceptance run, zero validation errors and inspect every
   warning. Record actual case counts; do not copy M2C-1's historical 122/122 into new results.
 - [ ] Run both formal mip samples; exercise fixed LOD, zoom/pause, resize/minimize/restore and
@@ -386,7 +386,17 @@ unavailable, and changed live color formats remain separately reported limits.
   probe targeting the SDL window also passed. This required only a local probe correction.
   Logs/results: `build/diagnostics/m2c2-stream-geometry-20261016/`; build logs:
   `build/m2c2-task4-*-build.log` (all ignored).
-- Next implementation task: Task 5 remaining 64-batch data stress, stable allocation checks and
-  streamed LOD-6/implicit pixel verification, followed by Task 6 final acceptance.
+- Task 5 completed on 2026-10-19: the two-slot test submits 64 deterministic batches with aligned
+  and odd-sized ranges, compares each readback before reuse, drains the last two batches, rejects
+  stale completion before and after a successful fence wait without changing batch state, and
+  checks stable source handles/capacity/live allocation counts/bytes plus return to baseline.
+  Streamed pixel checks cover LOD 0/6, implicit LOD 4
+  minification and scale 1/0.5 for both generated and forced-CPU mips. No production API changed.
+  Both full VS2026 builds and opt-in CTest pass 145/145 per configuration with no skips; the final
+  focused Debug stress/pixel check passes 2419 assertions in three cases. Khronos synchronization/submit-time
+  validation is loaded, with zero errors/warnings. Logs/results use the same diagnostics directory
+  above with `task5-final-*` names; build logs are `build/m2c2-task5-*-build.log`. Final manual/RenderDoc acceptance, native
+  failure injection, non-coherent hardware and VS2022 remain unverified.
+- Next implementation task: Task 6 final manual/RenderDoc acceptance and documentation review.
 - Next slice after acceptance: resource retirement keyed to last successful graphics use, with
   runtime texture/descriptor replacement and explicit dependent-before-image destruction.
