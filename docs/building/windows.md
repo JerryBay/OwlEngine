@@ -342,6 +342,13 @@ copy and the destination bound as both vertex and index buffer (index offset 64)
 stays 1 while uploaded positions change. Capture fixed LOD 0 and 6 plus a small automatic frame and compare
 the render targets. Use the same RenderDoc version for capture and MCP replay (currently 1.43).
 
+M2C-2 acceptance on 2026-11-04 includes user-confirmed controls for both samples, Debug captures
+of their streamed LOD-0 frames, and normal exits with matching serials and upload counters.
+The captures verify copy-before-draw and the shared vertex/index destination; they do not replace
+the independent pixel tests. RenderDoc muted validation output in those runs, so synchronization
+validation is evidenced by the separate full CTest runs. See the
+[verification record](../superpowers/plans/2026-10-09-owlengine-m2c2-frame-upload-storage.md#5-verification-record).
+
 ## Image Upload and Readback Tests
 
 The focused upload tests cover exact RGBA8 UNORM/SRGB roundtrips at 1x1, 1x7, 7x1, 7x3 and 17x9,

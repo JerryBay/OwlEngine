@@ -19,6 +19,7 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanBufferUpload.h
     src/VulkanUploadArena.cpp
     src/VulkanUploadArena.h
+    src/VulkanResourceRetirement.h
     src/VulkanFrame.cpp
     src/VulkanFrame.h
     src/VulkanInstance.cpp

@@ -2,10 +2,10 @@
 
 **Date:** 2026-10-09
 
-**Status:** Tasks 1-5, including streamed quad geometry, independent dual-slot stress and streamed
-mip output evidence, are implemented and verified locally on VS2026 Debug/RelWithDebInfo. Task 6
-final manual/RenderDoc acceptance remains pending. Unchecked tasks below are planned work, not
-evidence that the feature exists or tests have passed.
+**Status:** Tasks 1-6 are accepted locally. Tasks 1-5 passed VS2026 Debug/RelWithDebInfo builds and
+tests; Task 6 completed on 2026-11-04 with user-confirmed manual controls, Debug streamed-frame
+captures, shutdown statistics and source review. Portability and native-failure limits remain
+explicitly unverified below.
 
 **Goal:** Reuse bounded, persistently mapped staging storage across the existing two frame slots,
 then demonstrate changing geometry through GPU copies and indexed draws without a steady-state
@@ -299,11 +299,11 @@ ship with this task; final control/RenderDoc acceptance and the remaining Task 5
 - [x] Run each full CTest preset with GPU opt-in and actual Khronos synchronization/submit-time
   validation. Require no skips for this acceptance run, zero validation errors and inspect every
   warning. Record actual case counts; do not copy M2C-1's historical 122/122 into new results.
-- [ ] Run both formal mip samples; exercise fixed LOD, zoom/pause, resize/minimize/restore and
+- [x] Run both formal mip samples; exercise fixed LOD, zoom/pause, resize/minimize/restore and
   normal close. Record exit codes, serial equality after WaitIdle, upload counts and capacity.
   Capture a streamed frame if RenderDoc is available to inspect copy-before-draw and the bound
   destination; a capture is separate evidence from exact readback and validation.
-- [ ] Review steady-state waits, failure cleanup, mapping moves, serial association, dependencies,
+- [x] Review steady-state waits, failure cleanup, mapping moves, serial association, dependencies,
   and descriptor immutability. Run `git diff --check` and document implemented/verified/unverified
   scope separately. Do not stage or commit automatically.
 
@@ -397,6 +397,33 @@ unavailable, and changed live color formats remain separately reported limits.
   validation is loaded, with zero errors/warnings. Logs/results use the same diagnostics directory
   above with `task5-final-*` names; build logs are `build/m2c2-task5-*-build.log`. Final manual/RenderDoc acceptance, native
   failure injection, non-coherent hardware and VS2022 remain unverified.
-- Next implementation task: Task 6 final manual/RenderDoc acceptance and documentation review.
-- Next slice after acceptance: resource retirement keyed to last successful graphics use, with
+- Task 6 completed on 2026-11-04 against unchanged source revision `336a30e`. The user confirmed
+  fixed LOD, zoom/pause, resize/minimize/restore and normal close for both formal mip samples.
+  This is user-reported control acceptance; the two captured runs' counters alone do not prove
+  resize coverage (both report swapchain generation 1).
+- Both captured VS2026 Debug instances exited with code 0 and `Shutdown complete`. GPU-mip:
+  14661 submitted/completed serial, 1114236 uploaded bytes. CPU-mip: 14325 submitted/completed
+  serial, 1088700 uploaded bytes. Both retain capacity 131072, with payload = 76 * submissions.
+- RenderDoc 1.43/MCP opened each newly captured LOD-0 frame (frame 278, 7 actions, one indexed
+  draw). In each capture, upload Buffer 133 is CopySrc at EID 11; 76-byte Buffer 102 is CopyDst,
+  has barriers at EIDs 10/12, and is both vertex and index input at draw EID 22 (six indices).
+  Exported geometry matches all four position/UV vertices and indices 0,1,2,2,3,0; the GPU path's
+  post-transform mesh also matches. Both 1280x720 render-target PNGs are identical, with the
+  expected checkerboard and origin marker; the image has seven mip levels. New LOD-6/automatic
+  captures were not taken; Task 5's independent pixel tests and user acceptance cover those modes.
+- Capture diagnostics used the existing restricted-process launcher and process-local layer
+  environment. The CLI reported a missing requested file, but RenderDoc saved valid
+  `texture-mips_frame278.rdc` / `texture-mips-cpu_frame278.rdc`; MCP replay verified those files.
+  No system layer registration or tool installation changed. Khronos loaded, but RenderDoc muted
+  its debug output, so zero capture messages are not synchronization-validation evidence.
+  That evidence remains the separate 2026-10-19 145/145 runs; unchanged code did not need another
+  build/CTest run for this documentation/acceptance step.
+- Main-session source review covered slot-fence waits versus recreation/shutdown idle waits,
+  pending ownership after failed recording/submission/present, mapped-pointer moves and VMA
+  release, successful-submit serial association, copy/read barriers and immutable descriptors.
+  No blocking issue was found. No new independent-agent review or native fault injection occurred.
+  Captures, MCP evidence, PNGs, geometry exports, exit logs and `acceptance-summary.json` are in
+  `build/diagnostics/m2c2-acceptance-20261104/` (ignored). VS2022, separate graphics/present hardware,
+  native non-coherent memory and changed live color formats remain unverified.
+- Next slice: resource retirement keyed to last successful graphics use, with
   runtime texture/descriptor replacement and explicit dependent-before-image destruction.
