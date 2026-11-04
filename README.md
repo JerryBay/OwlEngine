@@ -39,12 +39,18 @@ M2C-1 gives successful frame submissions stable serials and tracks fence-observe
 preparing for safe reuse and retirement while frames are in flight. M2C-2 now provides CPU upload
 range/reuse policies, persistent Buffer mapping and bounded upload arenas with per-slot ownership.
 The two mip samples now upload CPU-scaled quad geometry each frame into separate device-local
-destinations. Both VS2026 configurations pass 145/145 opt-in tests with synchronization validation,
+destinations. The M2C-2 checkpoint passed 145/145 opt-in tests in both VS2026 configurations,
+with synchronization validation,
 including dual-slot upload stress, stale-completion rejection, stable allocation behavior and
 independent streamed LOD 0/6/implicit pixel checks for both GPU and CPU mip generation. M2C-2 final
 acceptance now includes user-confirmed controls, normal-exit upload statistics and RenderDoc/MCP
-inspection of streamed LOD-0 frames. M2C-3 starts with a tested bounded CPU retirement queue;
-native texture-binding ownership and runtime replacement are next. See the
+inspection of streamed LOD-0 frames. M2C-3 now provides a bounded CPU retirement queue and an
+immutable texture binding that owns its image, view, sampler and descriptor allocation independently
+of the draw pipeline. Runtime replacement now submits a bounded upload, publishes a new binding
+after completion and retires the old one by its last successful graphics-use serial. Press R in
+either mip sample to switch texture palettes. Both VS2026 configurations pass the current full
+suite, 163/163 with actual synchronization validation and zero errors/warnings. New manual/capture
+acceptance and M2D statistics remain. See the
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.

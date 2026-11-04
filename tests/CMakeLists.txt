@@ -31,6 +31,7 @@ set(OWL_VULKAN_TEST_SOURCES
     vulkan/GpuTestContext.h
     vulkan/SwapchainTests.cpp
     vulkan/TexturePipelineTests.cpp
+    vulkan/TextureBindingTests.cpp
     vulkan/TextureSamplingTests.cpp
     vulkan/TrianglePipelineTests.cpp
     vulkan/VulkanBootstrapTests.cpp

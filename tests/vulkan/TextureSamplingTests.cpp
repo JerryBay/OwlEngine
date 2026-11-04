@@ -26,10 +26,10 @@ namespace
     using Pixel = std::array<unsigned int, 4>;
 
     std::optional<std::vector<std::byte>>
-    DrawAndReadback(const owl::tests::GpuContext& context,
-                    const VulkanTexturedQuadPipeline& pipeline,
+    DrawAndReadback(const owl::tests::GpuContext& context, VulkanTexturedQuadPipeline& pipeline,
                     const TextureDrawParameters& parameters, std::string& error,
-                    std::optional<std::size_t> streamingSlot = std::nullopt);
+                    std::optional<std::size_t> streamingSlot = std::nullopt,
+                    std::uint64_t serial = 0);
 
     Pixel PixelAt(const std::vector<std::byte>& pixels, const std::size_t x, const std::size_t y)
     {
@@ -100,10 +100,9 @@ namespace
     }
 
     std::optional<std::vector<std::byte>>
-    DrawAndReadback(const owl::tests::GpuContext& context,
-                    const VulkanTexturedQuadPipeline& pipeline,
+    DrawAndReadback(const owl::tests::GpuContext& context, VulkanTexturedQuadPipeline& pipeline,
                     const TextureDrawParameters& parameters, std::string& error,
-                    const std::optional<std::size_t> streamingSlot)
+                    const std::optional<std::size_t> streamingSlot, const std::uint64_t serial)
     {
         DrawResources resources;
         resources.device = context.device->Get();
@@ -300,6 +299,8 @@ namespace
         resources.pending = submitted == VK_SUCCESS;
         if (!NativeSuccess(submitted, "vkQueueSubmit2(texture sampling)", error))
             return std::nullopt;
+        if (serial != 0)
+            pipeline.RecordTextureSubmit(serial);
         if (resources.upload)
             resources.upload->MarkSubmitted(1);
         const auto waited = vkWaitForFences(resources.device, 1, &fence, VK_TRUE,
@@ -499,7 +500,132 @@ namespace
         }
     }
 
+    void VerifyTextureReplacement(const TextureMipMode mode)
+    {
+        if (!owl::tests::IsGpuTestEnabled())
+            SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 for texture replacement readback");
+        std::string error;
+        auto context = owl::tests::CreateGpuContext(error);
+        INFO(error);
+        REQUIRE(context);
+        const auto allocations = [&]
+        {
+            VmaTotalStatistics stats{};
+            vmaCalculateStatistics(context->allocator->Get(), &stats);
+            return stats.total.statistics;
+        };
+        const auto baseline = allocations();
+        {
+            VulkanTexturedQuadPipeline pipeline;
+            PipelineDrainGuard drain{pipeline, context->device->Get()};
+            const std::filesystem::path assets{OWL_TEXTURE_TEST_ASSET_DIR};
+            REQUIRE(pipeline.Initialize(
+                *context->device, *context->allocator,
+                {assets / "texture_mips.vert.spv", assets / "texture_mips.frag.spv"}, error, mode));
+            REQUIRE(pipeline.SetColorFormat(TargetFormat, error));
+            const auto initialAllocations = allocations();
+            std::uint64_t serial = 0;
+            auto original =
+                DrawAndReadback(*context, pipeline, {.lod = 0.0F}, error, std::nullopt, ++serial);
+            REQUIRE(original);
+            CHECK(pipeline.TextureLastUseSerial() == serial);
+            std::array<std::byte, 64 * 64 * 4> pixels{};
+            const auto setSolid = [&](std::byte red)
+            {
+                for (std::size_t i = 0; i < pixels.size(); i += 4)
+                {
+                    pixels[i] = red;
+                    pixels[i + 1] = std::byte{70};
+                    pixels[i + 2] = std::byte{190};
+                    pixels[i + 3] = std::byte{255};
+                }
+            };
+            setSolid(std::byte{25});
+            CHECK(pipeline.RequestTextureReplacement(*context->device, *context->allocator,
+                                                     std::span{pixels}.first(4),
+                                                     error) == TextureReplacementResult::Failed);
+            CHECK_FALSE(pipeline.TextureReplacementPending());
+            CHECK(pipeline.TextureLastUseSerial() == serial);
+            REQUIRE(pipeline.RequestTextureReplacement(*context->device, *context->allocator,
+                                                       pixels, error) ==
+                    TextureReplacementResult::Accepted);
+            CHECK(error.empty());
+            REQUIRE(pipeline.TextureReplacementPending());
+            CHECK(pipeline.RequestTextureReplacement(*context->device, *context->allocator, pixels,
+                                                     error) == TextureReplacementResult::Busy);
+            CHECK(error.empty());
+            // Accepted input is copied. A later caller edit cannot alter the submitted pixels.
+            setSolid(std::byte{250});
+            auto stillOriginal =
+                DrawAndReadback(*context, pipeline, {.lod = 0.0F}, error, std::nullopt, ++serial);
+            REQUIRE(stillOriginal);
+            CHECK(*stillOriginal == *original);
+            REQUIRE(pipeline.WaitForUpload(error) == VK_SUCCESS);
+            REQUIRE(pipeline.ProcessTextureReplacement(*context->device, 0, error) == VK_SUCCESS);
+            CHECK_FALSE(pipeline.TextureReplacementPending());
+            REQUIRE(pipeline.TextureReplacements() == 1);
+            REQUIRE(pipeline.PendingTextureRetirements() == 1);
+            CHECK(pipeline.TextureLastUseSerial() == 0);
+            // Last use is the second draw, after the upload submit, not the first draw.
+            CHECK(pipeline.CollectRetiredTextures(1) == 0);
+            CHECK(allocations().allocationCount == initialAllocations.allocationCount + 1);
+            CHECK(pipeline.CollectRetiredTextures(2) == 1);
+            for (const float lod : {0.0F, 6.0F})
+            {
+                auto replaced = DrawAndReadback(*context, pipeline, {.lod = lod}, error,
+                                                std::nullopt, ++serial);
+                REQUIRE(replaced);
+                CHECK(PixelAt(*replaced, 9, 9) == Pixel{25, 70, 190, 255});
+                CHECK(PixelAt(*replaced, 23, 10) == Pixel{25, 70, 190, 255});
+            }
+            // Withhold completion conservatively to fill all four retirement slots. Each
+            // last-use value comes from a real successful draw; physical GPU speed is irrelevant.
+            std::array<std::uint64_t, 4> lastUses{};
+            for (std::size_t index = 0; index < lastUses.size(); ++index)
+            {
+                auto drawn = DrawAndReadback(*context, pipeline, {}, error, std::nullopt, ++serial);
+                REQUIRE(drawn);
+                lastUses[index] = serial;
+                setSolid(static_cast<std::byte>(30 + index));
+                REQUIRE(pipeline.RequestTextureReplacement(*context->device, *context->allocator,
+                                                           pixels, error) ==
+                        TextureReplacementResult::Accepted);
+                REQUIRE(pipeline.WaitForUpload(error) == VK_SUCCESS);
+                REQUIRE(pipeline.ProcessTextureReplacement(*context->device, 0, error) ==
+                        VK_SUCCESS);
+                CHECK(pipeline.PendingTextureRetirements() == index + 1);
+            }
+            const auto full = allocations();
+            CHECK(pipeline.RequestTextureReplacement(*context->device, *context->allocator, pixels,
+                                                     error) == TextureReplacementResult::Busy);
+            CHECK_FALSE(pipeline.TextureReplacementPending());
+            CHECK(allocations().allocationCount == full.allocationCount);
+            CHECK(pipeline.CollectRetiredTextures(lastUses[1]) == 2);
+            CHECK(pipeline.PendingTextureRetirements() == 2);
+            CHECK(pipeline.CollectRetiredTextures(serial) == 2);
+            auto final =
+                DrawAndReadback(*context, pipeline, {.lod = 6.0F}, error, std::nullopt, ++serial);
+            REQUIRE(final);
+            CHECK(PixelAt(*final, 32, 32) == Pixel{33, 70, 190, 255});
+            CHECK(allocations().allocationCount == initialAllocations.allocationCount);
+            CHECK(allocations().allocationBytes == initialAllocations.allocationBytes);
+        }
+        CHECK(allocations().allocationCount == baseline.allocationCount);
+        CHECK(allocations().allocationBytes == baseline.allocationBytes);
+    }
 } // namespace
+
+TEST_CASE("GPU mip texture replacement preserves pixels and bounded lifetime",
+          "[vulkan][integration][texture-replacement]")
+{
+    VerifyTextureReplacement(TextureMipMode::Generate);
+}
+
+TEST_CASE("CPU mip texture replacement preserves pixels and bounded lifetime",
+          "[vulkan][integration][texture-replacement]")
+{
+    VerifyTextureReplacement(TextureMipMode::ForceCpu);
+}
 
 TEST_CASE("Automatically generated mip texture samples explicit and implicit levels",
           "[vulkan][texture][mip][sampling][integration]")

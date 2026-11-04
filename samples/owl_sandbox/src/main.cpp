@@ -22,7 +22,8 @@ namespace
                   << "  --sample texture           Run the M2 Vulkan textured quad sample\n"
                   << "  --sample texture-mips      Inspect generated texture mips\n"
                   << "  --sample texture-mips-cpu  Inspect CPU-generated texture mips\n"
-                  << "    Mip controls: 0-6 choose LOD, A starts automatic zoom, Space pauses.\n";
+                  << "    Mip controls: 0-6 choose LOD, A starts automatic zoom, Space pauses, R "
+                     "replaces texture.\n";
     }
 } // namespace
 

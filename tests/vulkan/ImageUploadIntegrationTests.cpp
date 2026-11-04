@@ -411,14 +411,17 @@ TEST_CASE("Vulkan image upload preserves pending ownership through moves and rep
         CHECK_FALSE(moved.IsPending());
         CHECK(replacement->IsPending());
         CHECK(AllocationStatistics(*movedAllocator).allocationCount == baseline.allocationCount + 2);
-        const VkResult polled = replacement->Wait(error, 0);
-        REQUIRE((polled == VK_SUCCESS || polled == VK_TIMEOUT));
-        if (polled == VK_TIMEOUT)
+        const VkResult polled = replacement->Poll(error);
+        REQUIRE((polled == VK_SUCCESS || polled == VK_NOT_READY));
+        CHECK(error.empty());
+        if (polled == VK_NOT_READY)
         {
             CHECK(replacement->IsPending());
             CHECK_FALSE(replacement->TakeDestination(error));
         }
         REQUIRE(replacement->Wait(error) == VK_SUCCESS);
+        CHECK(replacement->Poll(error) == VK_SUCCESS);
+        CHECK(error.empty());
         CHECK_FALSE(replacement->IsPending());
         CHECK(AllocationStatistics(*movedAllocator).allocationCount == baseline.allocationCount + 1);
         CHECK(replacement->Submit(error) != VK_SUCCESS);

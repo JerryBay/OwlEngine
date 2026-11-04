@@ -46,6 +46,8 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanTrianglePipeline.h
     src/VulkanTexturedQuadPipeline.cpp
     src/VulkanTexturedQuadPipeline.h
+    src/VulkanTextureBinding.cpp
+    src/VulkanTextureBinding.h
 )
 
 target_include_directories(OwlVulkan

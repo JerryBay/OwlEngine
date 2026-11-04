@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <span>
 #include <utility>
 
@@ -141,7 +142,9 @@ namespace owl::vulkan
             return;
         vkDestroyPipeline(device_, pipeline_, nullptr);
         vkDestroyPipelineLayout(device_, layout_, nullptr);
-        vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+        // The outer renderer has already drained all work (or established device loss).
+        retiredTextures_.Collect(std::numeric_limits<std::uint64_t>::max());
+        textureBinding_.reset();
         vkDestroyDescriptorSetLayout(device_, descriptorLayout_, nullptr);
     }
 
@@ -233,22 +236,12 @@ namespace owl::vulkan
         imageUpload_ = std::move(*imageUpload);
         if (imageUpload_->Submit(error) != VK_SUCCESS || WaitForUpload(error) != VK_SUCCESS)
             return false;
-        view_ = VulkanImageView::Create(*image_, {.levelCount = mipLevels_}, error);
-        if (!view_)
+        // Keep the upload operation owned through failed waits. Only a completed destination
+        // leaves that owner; this local image also unwinds safely if binding creation fails.
+        auto image = imageUpload_->TakeDestination(error);
+        if (!image)
             return false;
-        const VulkanSamplerDesc samplerDesc{
-            .minFilter = VK_FILTER_NEAREST,
-            .magFilter = VK_FILTER_NEAREST,
-            .mipmapMode =
-                mipLevels_ > 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .maxLod = static_cast<float>(mipLevels_ - 1),
-        };
-        sampler_ = VulkanSampler::Create(device, samplerDesc, error);
-        if (!sampler_)
-            return false;
+        imageUpload_.reset();
 
         const VkDescriptorSetLayoutBinding textureBinding{
             .binding = 0,
@@ -267,43 +260,10 @@ namespace owl::vulkan
                 "vkCreateDescriptorSetLayout(texture)", error))
             return false;
         descriptorLayout_ = descriptorLayout;
-        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-        const VkDescriptorPoolCreateInfo poolInfo{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1,
-            .poolSizeCount = 1,
-            .pPoolSizes = &poolSize,
-        };
-        VkDescriptorPool pool = VK_NULL_HANDLE;
-        if (!Check(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool),
-                   "vkCreateDescriptorPool(texture)", error))
+        textureBinding_ = VulkanTextureBinding::Create(device, descriptorLayout_, *image, error);
+        if (!textureBinding_)
             return false;
-        descriptorPool_ = pool;
-        const VkDescriptorSetAllocateInfo allocateInfo{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = descriptorPool_,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &descriptorLayout_,
-        };
-        VkDescriptorSet set = VK_NULL_HANDLE;
-        if (!Check(vkAllocateDescriptorSets(device_, &allocateInfo, &set),
-                   "vkAllocateDescriptorSets(texture)", error))
-            return false;
-        descriptorSet_ = set;
-        const VkDescriptorImageInfo imageInfo{
-            .sampler = sampler_->Get(),
-            .imageView = view_->Get(),
-            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
-        const VkWriteDescriptorSet write{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptorSet_,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &imageInfo,
-        };
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        mipMode_ = mipMode;
         const VkPushConstantRange pushRange{
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MipPushConstants)};
         const VkPipelineLayoutCreateInfo layoutInfo{
@@ -331,6 +291,108 @@ namespace owl::vulkan
         return gpuMipGeneration_;
     }
 
+    TextureReplacementResult VulkanTexturedQuadPipeline::RequestTextureReplacement(
+        const VulkanDevice& device, const VulkanAllocator& allocator,
+        const std::span<const std::byte> rgba8, std::string& error)
+    {
+        error.clear();
+        if (!textureBinding_ || device.Get() != device_ || !allocator.IsValid() ||
+            allocator.Device() != device_ || rgba8.size() != 64 * 64 * 4 ||
+            textureReplacements_ == std::numeric_limits<std::uint64_t>::max())
+        {
+            error =
+                "Texture replacement requires initialized matching parents and 64x64 RGBA8 input";
+            return TextureReplacementResult::Failed;
+        }
+        if (imageUpload_ || retiredTextures_.PendingCount() == MaxRetiredTextures)
+            return TextureReplacementResult::Busy;
+        const VulkanImageDesc desc{
+            .extent = {64, 64},
+            .format = VK_FORMAT_R8G8B8A8_UNORM,
+            .mipLevels = mipLevels_,
+            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                     (mipLevels_ > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0U),
+        };
+        auto upload = VulkanImageUpload::Create(device, allocator, desc, rgba8, error,
+                                                mipMode_ == TextureMipMode::ForceCpu
+                                                    ? MipGenerationMode::ForceCpu
+                                                    : MipGenerationMode::Auto);
+        if (!upload)
+            return TextureReplacementResult::Failed;
+        // Publish ownership before submitting: a failed/throwing diagnostic must never drop work.
+        imageUpload_ = std::move(*upload);
+        const auto result = imageUpload_->Submit(error);
+        if (result != VK_SUCCESS)
+        {
+            if (result != VK_ERROR_DEVICE_LOST)
+                imageUpload_.reset(); // No submission was accepted.
+            return TextureReplacementResult::Failed;
+        }
+        return TextureReplacementResult::Accepted;
+    }
+    VkResult VulkanTexturedQuadPipeline::ProcessTextureReplacement(
+        const VulkanDevice& device, const std::uint64_t completedSerial, std::string& error)
+    {
+        error.clear();
+        CollectRetiredTextures(completedSerial);
+        if (!imageUpload_)
+            return VK_SUCCESS;
+        const auto result = imageUpload_->Poll(error);
+        if (result == VK_NOT_READY)
+            return VK_SUCCESS;
+        if (result != VK_SUCCESS)
+            return result;
+        if (retiredTextures_.PendingCount() == MaxRetiredTextures)
+            return VK_SUCCESS;
+        const bool gpuMips = imageUpload_->Path() == MipUploadPath::GpuBlit;
+        auto image = imageUpload_->TakeDestination(error);
+        if (!image)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        imageUpload_.reset();
+        auto replacement = VulkanTextureBinding::Create(device, descriptorLayout_, *image, error);
+        if (!replacement)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        // No concurrent caller or callback may record another use between retirement/publication.
+        if (!retiredTextures_.TryRetire(textureLastUseSerial_, textureBinding_))
+        {
+            error = "Texture retirement requires an active binding and a free slot";
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        textureBinding_ = std::move(replacement);
+        textureLastUseSerial_ = 0;
+        gpuMipGeneration_ = gpuMips;
+        ++textureReplacements_;
+        CollectRetiredTextures(
+            completedSerial); // Immediately release never-used/completed versions.
+        return VK_SUCCESS;
+    }
+    void VulkanTexturedQuadPipeline::RecordTextureSubmit(const std::uint64_t serial) noexcept
+    {
+        if (textureBinding_ && serial > textureLastUseSerial_)
+            textureLastUseSerial_ = serial;
+    }
+    std::size_t
+    VulkanTexturedQuadPipeline::CollectRetiredTextures(const std::uint64_t completedSerial) noexcept
+    {
+        return retiredTextures_.Collect(completedSerial);
+    }
+    std::uint64_t VulkanTexturedQuadPipeline::TextureReplacements() const noexcept
+    {
+        return textureReplacements_;
+    }
+    std::uint64_t VulkanTexturedQuadPipeline::TextureLastUseSerial() const noexcept
+    {
+        return textureLastUseSerial_;
+    }
+    std::size_t VulkanTexturedQuadPipeline::PendingTextureRetirements() const noexcept
+    {
+        return retiredTextures_.PendingCount();
+    }
+    bool VulkanTexturedQuadPipeline::TextureReplacementPending() const noexcept
+    {
+        return imageUpload_.has_value();
+    }
+
     VkResult VulkanTexturedQuadPipeline::WaitForUpload(std::string& error)
     {
         if (geometryUpload_)
@@ -356,13 +418,8 @@ namespace owl::vulkan
                 imageUpload_.reset();
             else if (result != VK_SUCCESS)
                 return result;
-            else
-            {
-                image_ = imageUpload_->TakeDestination(error);
-                if (!image_)
-                    return VK_ERROR_INITIALIZATION_FAILED;
-                imageUpload_.reset();
-            }
+            // Initialize or ProcessTextureReplacement takes the completed destination.
+            // Until that handoff, the upload owner retains it for the destruction drain.
         }
         error.clear();
         return VK_SUCCESS;
@@ -591,8 +648,9 @@ namespace owl::vulkan
         }
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
+        const VkDescriptorSet descriptorSet = textureBinding_->DescriptorSet();
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
-                                &descriptorSet_, 0, nullptr);
+                                &descriptorSet, 0, nullptr);
         vkCmdBindVertexBuffers(command, 0, 1, &geometry, &vertexOffset);
         vkCmdBindIndexBuffer(command, geometry, IndexOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command, static_cast<std::uint32_t>(Indices.size()), 1, 0, 0, 0);

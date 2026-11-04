@@ -172,6 +172,24 @@ Descriptor Set。它们仍是独立对象，Set 不拥有 Image 或 View。Pipel
 还必须与采样时 Image 的真实布局一致；填入 `SHADER_READ_ONLY_OPTIMAL` 不能代替上传后的布局转换和内存依赖。
 GPU 仍在使用某个 Set 时，不能随意改写它引用的描述符或销毁其资源；需要等待完成或使用明确允许的更新机制。
 
+### 资源替换与最后一次使用
+
+运行时换纹理可以采用“创建新版本，再切换绑定”的方式：新 Image 上传完成后，建立新的 View、Sampler
+和 Descriptor Set；后续命令引用新版本，已经提交的命令继续使用旧版本。应用应把旧版本及其描述符依赖
+作为一个整体保留，直到最后一次引用它的 GPU 工作完成。独立 Descriptor Pool 便于整体释放，代价是
+每个版本多一个 Pool；扩大资源规模后可以再设计按完成进度回收的描述符分配器。
+
+**上传完成不等于旧版本可以销毁。** 例如依次提交“使用旧纹理的帧 10 → 新纹理上传 → 仍使用旧纹理的帧 11”，
+上传 Fence 完成只说明新纹理已准备好，不能证明帧 11 完成。切换时应保存旧版本最后一次成功提交的序号 11，
+等 CPU 观察到对应完成进度后再释放。记录了命令但提交失败，不能据此伪造新的在途使用；Present 失败也不撤销
+此前已成功提交的绘制。
+
+非阻塞 Fence 查询得到 `VK_NOT_READY` 时，应保留上传资源并继续使用旧绑定；这不是失败。
+回收队列满时也应保留所有旧资源并拒绝或推迟新请求，不能覆盖尚未完成的条目。查询、布局转换、GPU 可见性
+与对象销毁分别承担不同职责，不能互相替代。参见
+[vkGetFenceStatus](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetFenceStatus.html) 和
+[Descriptor Pool 销毁条件](https://docs.vulkan.org/refpages/latest/refpages/source/vkDestroyDescriptorPool.html)。
+
 继续深入：哪些状态适合固定在 Pipeline 中，哪些适合动态设置；Shader 资源接口如何与实际绑定的资源衔接。
 
 ## 5. 命令录制、提交与异步执行

@@ -244,7 +244,8 @@ namespace
         TextureMipsCpu,
     };
 
-    void RunLocalFrames(const SampleMode mode, const bool streamGeometry = false)
+    void RunLocalFrames(const SampleMode mode, const bool streamGeometry = false,
+                        const bool replaceTextures = false)
     {
         const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
         if (enabled == nullptr || std::string_view{enabled} != "1")
@@ -311,6 +312,32 @@ namespace
         const std::uint64_t expectedUploadCapacity = streamGeometry ? 2 * 64 * 1024 : 0;
         REQUIRE(renderer->Stats().frameUploadCapacityBytes == expectedUploadCapacity);
         CHECK(renderer->Stats().frameUploadedBytes == 0);
+        std::array<std::byte, 64 * 64 * 4> replacementPixels{};
+        std::uint64_t acceptedReplacements = 0;
+        const auto requestReplacement = [&]
+        {
+            replacementPixels.fill(static_cast<std::byte>(acceptedReplacements % 255));
+            REQUIRE(renderer->RequestTextureReplacement(replacementPixels, error) ==
+                    owl::vulkan::TextureReplacementResult::Accepted);
+            ++acceptedReplacements;
+            REQUIRE(renderer->Stats().textureReplacementPending);
+            CHECK(renderer->RequestTextureReplacement(replacementPixels, error) ==
+                  owl::vulkan::TextureReplacementResult::Busy);
+            CHECK(error.empty());
+        };
+        if (replaceTextures)
+        {
+            CHECK(renderer->RequestTextureReplacement({}, error) ==
+                  owl::vulkan::TextureReplacementResult::Failed);
+            CHECK(renderer->IsValid());
+            requestReplacement();
+        }
+        else if (mode == SampleMode::Clear || mode == SampleMode::Triangle)
+        {
+            CHECK(renderer->RequestTextureReplacement(replacementPixels, error) ==
+                  owl::vulkan::TextureReplacementResult::Failed);
+            CHECK(renderer->IsValid());
+        }
         const auto checkUploadStats = [&](const owl::vulkan::VulkanTriangleStats& stats)
         {
             CHECK(stats.frameUploadCapacityBytes == expectedUploadCapacity);
@@ -361,10 +388,20 @@ namespace
                         parameters.scale = 1.0F / 128;
                 }
                 const auto before = renderer->Stats();
+                if (replaceTextures && acceptedReplacements < 32 &&
+                    !before.textureReplacementPending)
+                    requestReplacement();
                 const auto result = renderer->RenderFrame(error, parameters);
                 INFO(error);
                 REQUIRE(result != owl::vulkan::FrameResult::Failed);
                 const auto after = renderer->Stats();
+                if (replaceTextures)
+                {
+                    CHECK(after.pendingTextureRetirements <= 4);
+                    CHECK(after.textureReplacements <= acceptedReplacements);
+                    if (after.submittedSerial > before.submittedSerial)
+                        CHECK(after.textureLastUseSerial == after.submittedSerial);
+                }
                 CHECK(after.submittedSerial == after.submittedFrames);
                 CHECK(after.submittedSerial >= before.submittedSerial);
                 CHECK(after.completedSerial >= before.completedSerial);
@@ -385,6 +422,16 @@ namespace
             CHECK(error.empty());
         };
         renderFrames(120);
+        if (replaceTextures)
+        {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+            while (acceptedReplacements < 32 && std::chrono::steady_clock::now() < deadline)
+                renderFrames(2);
+            REQUIRE(acceptedReplacements == 32);
+            REQUIRE(renderer->WaitIdle(error));
+            CHECK(renderer->Stats().textureReplacements == acceptedReplacements);
+            requestReplacement(); // Preserve accepted work through renderer moves.
+        }
         if (mode == SampleMode::TextureMips || mode == SampleMode::TextureMipsCpu)
             checkInvalidDraw();
         const auto initial = renderer->Stats();
@@ -399,6 +446,8 @@ namespace
         CHECK(moved.Stats().frameUploadCapacityBytes == initial.frameUploadCapacityBytes);
         CHECK(moved.Stats().frameUploadedBytes == initial.frameUploadedBytes);
         *renderer = std::move(moved);
+        if (replaceTextures)
+            CHECK(renderer->Stats().textureReplacementPending);
         CHECK_FALSE(moved.IsValid());
         CHECK(moved.Stats().frameUploadCapacityBytes == 0);
         CHECK(moved.Stats().frameUploadedBytes == 0);
@@ -424,6 +473,8 @@ namespace
         REQUIRE(SDL_SyncWindow(native));
         REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
         const auto beforeMinimized = renderer->Stats();
+        if (replaceTextures)
+            requestReplacement();
         for (int frame = 0; frame < 4; ++frame)
             CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Deferred);
         CHECK(renderer->Stats().submittedFrames == beforeMinimized.submittedFrames);
@@ -438,6 +489,12 @@ namespace
         renderFrames(120);
         const auto beforeIdle = renderer->Stats();
         REQUIRE(renderer->WaitIdle(error));
+        if (replaceTextures)
+        {
+            CHECK(renderer->Stats().textureReplacements == acceptedReplacements);
+            CHECK_FALSE(renderer->Stats().textureReplacementPending);
+            CHECK(renderer->Stats().pendingTextureRetirements == 0);
+        }
         CHECK(renderer->Stats().frameUploadedBytes == beforeIdle.frameUploadedBytes);
         checkUploadStats(renderer->Stats());
         CHECK(renderer->Stats().completedSerial == renderer->Stats().submittedSerial);
@@ -446,6 +503,8 @@ namespace
         CHECK(renderer->Stats().presentedFrames > initial.presentedFrames);
         CHECK(renderer->Stats().indexedDraws ==
               (mode != SampleMode::Clear ? renderer->Stats().submittedFrames : 0));
+        if (replaceTextures)
+            requestReplacement(); // Destructor must drain an accepted upload without another frame.
         renderer.reset();
         CHECK(window->IsValid());
     }
@@ -459,6 +518,33 @@ TEST_CASE("Vulkan clear frames resize and recover locally", "[vulkan][integratio
 TEST_CASE("Vulkan triangle frames resize and recover locally", "[vulkan][integration][triangle]")
 {
     RunLocalFrames(SampleMode::Triangle);
+}
+
+TEST_CASE("Empty renderer rejects texture replacement", "[vulkan][texture-replacement]")
+{
+    owl::vulkan::VulkanTriangle renderer;
+    std::string error;
+    CHECK(renderer.RequestTextureReplacement({}, error) ==
+          owl::vulkan::TextureReplacementResult::Failed);
+    CHECK_FALSE(error.empty());
+}
+
+TEST_CASE("Single-level texture replacement survives frame lifecycle",
+          "[vulkan][integration][texture-replacement]")
+{
+    RunLocalFrames(SampleMode::Texture, false, true);
+}
+
+TEST_CASE("GPU mip texture replacement survives streaming and frame lifecycle",
+          "[vulkan][integration][texture-replacement]")
+{
+    RunLocalFrames(SampleMode::TextureMips, true, true);
+}
+
+TEST_CASE("CPU mip texture replacement survives streaming and frame lifecycle",
+          "[vulkan][integration][texture-replacement]")
+{
+    RunLocalFrames(SampleMode::TextureMipsCpu, true, true);
 }
 
 TEST_CASE("Vulkan texture frames resize and recover locally", "[vulkan][integration][texture]")

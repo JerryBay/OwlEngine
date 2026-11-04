@@ -50,7 +50,7 @@ namespace owl::vulkan
         StateAfterImageUploadWait(ImageUploadState state, VkResult result) noexcept;
     } // namespace detail
 
-    // Owns one startup upload into a new RGBA8 image. Borrows native device/queue
+    // Owns one upload into a new RGBA8 image. Borrows native device/queue
     // and allocator lifetimes; wrappers may move, native parents must remain alive. Serialize
     // host access to this object and its graphics queue. CPU input may be released after Create.
     // Destruction/move replacement never waits: drain pending work explicitly first.
@@ -70,6 +70,8 @@ namespace owl::vulkan
                MipGenerationMode mode = MipGenerationMode::Auto);
         [[nodiscard]] MipUploadPath Path() const noexcept;
         [[nodiscard]] VkResult Submit(std::string& error);
+        // Nonblocking completion query. NOT_READY is normal progress and clears error.
+        [[nodiscard]] VkResult Poll(std::string& error);
         [[nodiscard]] VkResult Wait(
             std::string& error,
             std::uint64_t timeoutNanoseconds = std::numeric_limits<std::uint64_t>::max());

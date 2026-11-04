@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace owl::platform
@@ -31,6 +33,13 @@ namespace owl::vulkan
         SingleLevel,
         Generate,
         ForceCpu,
+    };
+
+    enum class TextureReplacementResult
+    {
+        Accepted,
+        Busy,
+        Failed,
     };
 
     // Sample-local draw controls. Absence of LOD requests the shader's implicit derivatives.
@@ -72,6 +81,10 @@ namespace owl::vulkan
         // Logical staging capacity and payload bytes from successful frame submissions only.
         std::uint64_t frameUploadCapacityBytes = 0;
         std::uint64_t frameUploadedBytes = 0;
+        std::uint64_t textureReplacements = 0;
+        std::uint64_t textureLastUseSerial = 0;
+        std::size_t pendingTextureRetirements = 0;
+        bool textureReplacementPending = false;
     };
 
     // Sample lifecycle. Clears, then optionally draws one configured indexed sample.
@@ -96,6 +109,11 @@ namespace owl::vulkan
         [[nodiscard]] FrameResult RenderFrame(std::string& error,
                                               const TextureDrawParameters& parameters = {});
         [[nodiscard]] bool WaitIdle(std::string& error);
+        // Sample-local 64x64 RGBA8 UNORM input, copied before returning Accepted. Retains the
+        // current mip policy. Busy preserves the active binding and accepts no new request.
+        // RenderFrame polls/publishes completed uploads; WaitIdle also finishes publication.
+        [[nodiscard]] TextureReplacementResult
+        RequestTextureReplacement(std::span<const std::byte> rgba8, std::string& error);
         [[nodiscard]] VulkanTriangleStats Stats() const noexcept;
 
     private:

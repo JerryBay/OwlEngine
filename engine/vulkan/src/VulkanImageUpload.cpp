@@ -355,6 +355,25 @@ namespace owl::vulkan
         return submitted;
     }
 
+    VkResult VulkanImageUpload::Poll(std::string& error)
+    {
+        error.clear();
+        if (state_ == detail::ImageUploadState::Completed)
+            return VK_SUCCESS;
+        if (state_ == detail::ImageUploadState::DeviceLost)
+        {
+            error = "Image upload device is lost";
+            return VK_ERROR_DEVICE_LOST;
+        }
+        if (!IsPending())
+            return VK_NOT_READY;
+        const VkResult result = vkGetFenceStatus(device_, fence_);
+        ObserveWaitResult(result);
+        if (result != VK_NOT_READY)
+            static_cast<void>(Check(result, "vkGetFenceStatus(image upload)", error));
+        return result;
+    }
+
     VkResult VulkanImageUpload::Wait(std::string& error, const std::uint64_t timeoutNanoseconds)
     {
         if (state_ == detail::ImageUploadState::Completed)

@@ -13,8 +13,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2C-2 frame-slot uploads are accepted locally. M2C-3 Task 1
-  CPU resource-retirement ownership is implemented and verified; native integration is next.
+- Current phase: M2 GPU resources; M2C-2 frame-slot uploads are accepted locally. M2C-3 Tasks 1-3
+  retirement ownership, native texture bindings and runtime replacement pass local automated
+  verification. R-key/manual and new RenderDoc acceptance remain before closing M2C-3.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -23,8 +24,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   Renderer frame submissions now have stable serials and fence-observed completion. CPU policies
   for bounded upload ranges, sealing and completion-gated reuse, plus opt-in persistent Buffer
   mapping and owned upload arenas are implemented. The two mip samples now stream per-slot
-  geometry. A bounded CPU retirement queue is implemented; texture-binding ownership and
-  runtime resource replacement remain to be integrated.
+  geometry. Runtime texture replacement now submits one bounded upload, publishes an immutable
+  binding after completion, and retires old bindings by their last successful graphics-use serial.
 
 ## Implemented Baseline
 
@@ -74,8 +75,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     an explicit non-throwing drain handles shutdown. Native parent handles survive wrapper moves.
     Independent test-only readback restores sampled layout and compares every source byte.
   - `--sample texture`: a procedural 64x64 checkerboard with an asymmetric origin marker is
-    uploaded once and sampled by a six-index quad. A private draw owner holds its Image/View,
-    nearest Sampler, one combined-image-sampler Descriptor Set, geometry and Graphics Pipeline.
+    uploaded once and sampled by a six-index quad. A private draw owner holds geometry and the
+    Graphics Pipeline, plus an immutable texture binding for its image and descriptor dependents.
     It shares the Clear/Triangle frame loop; extent-only recreation retains texture and bindings.
   - Private mip generation: capability-gated linear GPU blits keep each mip's layout explicit;
     missing blit support or transfer-source usage selects a CPU area-average chain. CPU sRGB RGB
@@ -84,7 +85,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   - `--sample texture-mips` / `texture-mips-cpu`: seven-level texture sampling with digits 0-6
     selecting explicit LOD, A starting implicit minification/zoom, and Space pausing/resuming.
     Sandbox owns input/time; the Vulkan owner records eight-byte scale/LOD push constants.
-    Full-range view, sampler and descriptor remain immutable across controls and extent changes.
+    Full-range view, sampler and descriptor remain immutable across LOD/zoom and extent changes;
+    R now requests an independently owned replacement texture.
   - M2C-1 private `VulkanSubmissionProgress`: each successful renderer graphics submission
     receives a nonzero, nonwrapping serial retained by its frame slot. Successful fence waits
     advance host-observed completion monotonically; failed submit/wait leaves progress unchanged.
@@ -121,8 +123,44 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     resource pointers with final last-use serials. Fixed slots accept out-of-order retirement;
     collection releases only completed entries. Null/full rejection preserves ownership, with
     no queue growth or GPU wait. The outer owner still must drain before queue destruction.
-    The queue is tested with CPU owners and is not yet instantiated by the native renderer.
+    Initially tested with CPU owners; Task 3 now integrates it with native texture bindings.
+  - M2C-3 Task 2 private `VulkanTextureBinding`: one immutable Image/View/Sampler and dedicated
+    Descriptor Pool/Set owner. Creation transfers the caller's image only after all children are
+    ready; rejection preserves it. Pool/Set destruction precedes sampler/view and image/allocation.
+    `VulkanTexturedQuadPipeline` retains the shared descriptor/pipeline layouts and draw pipeline,
+    takes only completed upload destinations, and binds the new owner's set. No upload, wait,
+    transition or runtime retirement is hidden in the binding. Per-binding pools permit independent
+    release at the cost of one pool per texture version; general descriptor allocation is deferred.
+  - M2C-3 Task 3 runtime texture replacement: sample-local `RequestTextureReplacement` copies
+    64x64 RGBA8 input and returns Accepted/Busy/Failed. One upload and four retirement slots bound
+    ownership. Nonblocking `VulkanImageUpload::Poll` treats NOT_READY as progress. Publication
+    creates a new immutable binding and retires the old one using its last successful draw serial;
+    successful frame-fence waits collect completed versions. Upload completion does not advance
+    frame progress. WaitIdle/recreation/shutdown drain accepted uploads and draws; partial/failure
+    paths retain the existing destruction contract. Both mip samples expose R palette switching,
+    replacement count, pending request and retirement counters. No steady-state GPU idle wait is
+    introduced; CPU preparation and allocation costs remain, and the request is not a general API.
 - Verified:
+  - 2026-11-04, M2C-3 Task 3: buildable stubs failed 6 focused cases / 13 assertions at missing
+    replacement, last-use and Poll behavior; 9 existing/negative cases passed. The green focused
+    Debug run passed 15 cases / 29038 assertions. Both full VS2026 Debug/RelWithDebInfo builds and
+    full opt-in CTest passed 163/163 per configuration, no skips, actual Khronos synchronization/
+    submit-time validation, zero validation errors/warnings. Readback verifies new LOD 0/6 pixels,
+    copied input, old output before publication, last use after upload submission, full-queue
+    rejection, partial collection and allocation count/byte cleanup. Renderer cases exercise 32
+    repeated replacements plus moves, resize/minimize/restore and pending-upload shutdown for
+    single-level/GPU/CPU mip modes, with both presentation modes. Source/format/diff review passed.
+    Manual R-key/RenderDoc, native failure injection and VS2022 remain unverified. Logs/results:
+    `build/diagnostics/m2c3-replacement-20261104/`; full build logs: `build/m2c3-task3-*-build.log`.
+  - 2026-11-04, M2C-3 Task 2: buildable stubs failed the two new GPU ownership cases; the empty-parent
+    CPU case passed. The final focused Debug run passed 14 cases / 37370 assertions. Both full VS2026
+    Debug/RelWithDebInfo builds and full opt-in CTest passed, 157/157 per configuration, no skips,
+    actual Khronos synchronization/submit-time validation and zero validation errors/warnings.
+    Tests cover rejected ownership transfer, independent binding destruction through serial-0
+    retirement, surviving descriptor validity and allocation count/byte cleanup. Existing GPU
+    texture/mip/streaming readback and frame lifecycle regressions pass. Source/format/diff review
+    passed; no new manual/RenderDoc acceptance or native failure injection is claimed. See the
+    texture-binding plan and `build/diagnostics/m2c3-texture-binding-20261104/` (ignored).
   - 2026-11-04, M2C-3 Task 1: buildable stubs failed all 9 new cases; the implementation passed
     9 cases / 93 assertions in Debug. OwlUnitTests target builds passed on VS2026 Debug and
     RelWithDebInfo; focused CPU CTest passed 28/28 per configuration without skips, including
@@ -326,7 +364,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A/M2B and M2C-2 accepted locally; M2C-3 CPU retirement queue implemented, native retirement integration and M2D remain | M2C-2 full CTest 145/145 per configuration, user acceptance and streamed captures; M2C-3 Task 1 focused CPU CTest 28/28 per configuration | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2A/M2B and M2C-2 accepted locally; M2C-3 runtime retirement implemented, manual/capture acceptance and M2D remain | M2C-3 Task 3 full CTest 163/163 per VS2026 configuration with synchronization validation; M2C-2 user acceptance and streamed captures remain historical | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -374,7 +412,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     fallback runs successfully locally but lacks the same specification-level release guarantee.
   - Buffer allocation uses VMA. Static geometry and textures retain blocking startup uploads;
     streamed geometry uses the graphics queue and waits only when reusing its frame slot.
-    Runtime texture uploads/retirement, a general Shader System, and RHI remain later work.
+    Runtime textures now use a separate bounded upload and serial-based retirement. General
+    transfer scheduling, a Shader System and RHI remain later work.
 
 ## Entry Points and Evidence
 
@@ -393,9 +432,15 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `docs/superpowers/plans/2026-10-09-owlengine-m2c2-frame-upload-storage.md`;
   `engine/vulkan/src/VulkanUploadArena.{h,cpp}`, `tests/vulkan/UploadArenaTests.cpp`, and
   `tests/vulkan/UploadArenaIntegrationTests.cpp`.
-- Resource retirement queue (Task 1 CPU ownership verified; native integration pending):
+- Resource retirement queue (Task 1 CPU ownership verified; Task 3 runtime integration verified):
   `docs/superpowers/plans/2026-11-04-owlengine-m2c3-retirement-queue.md`;
   `engine/vulkan/src/VulkanResourceRetirement.h` and `tests/vulkan/ResourceRetirementTests.cpp`.
+- Immutable texture binding (Task 2 native ownership extraction verified):
+  `docs/superpowers/plans/2026-11-04-owlengine-m2c3-texture-binding.md`;
+  `engine/vulkan/src/VulkanTextureBinding.{h,cpp}` and `tests/vulkan/TextureBindingTests.cpp`.
+- Runtime replacement (Task 3 automatic verification complete; manual/capture acceptance pending):
+  `docs/superpowers/plans/2026-11-04-owlengine-m2c3-runtime-replacement.md`;
+  `VulkanTexturedQuadPipeline`, `VulkanTriangle`, `TextureSamplingTests.cpp` and `FrameTests.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -456,16 +501,21 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `build/diagnostics/m2c2-acceptance-20261104/` (local, ignored).
 - M2C-3 Task 1 red/green tests, target builds and focused CPU CTest:
   `build/m2c3-task1-*.log` (local, ignored).
+- M2C-3 Task 2 red/green lifecycle tests, sampled regressions and full synchronization validation:
+  `build/diagnostics/m2c3-texture-binding-20261104/`; full build logs:
+  `build/m2c3-task2-*-build.log` (local, ignored).
+- M2C-3 Task 3 replacement red/green, readback and full synchronization validation:
+  `build/diagnostics/m2c3-replacement-20261104/`; full build logs:
+  `build/m2c3-task3-*-build.log` (local, ignored).
 
 ## Next Work
 
-- Next task: extract immutable texture-binding ownership (image, view, sampler and descriptor
-  allocation) from the textured-quad owner, preserving startup rendering and dependent-before-image
-  destruction. Then integrate runtime replacement with the CPU retirement queue and each active
-  binding's last successful graphics-use serial. Native GPU/readback/stress acceptance remains
-  required; the CPU queue alone does not implement runtime texture replacement.
-  Preserve completion-gated upload reuse and separate per-slot geometry destinations.
-  Preserve submission progress, single-mip, generated-mip readback and sampled-pixel baselines.
+- Next acceptance: exercise R in both mip samples at LOD 0/6 and during automatic zoom, resize/
+  minimize/restore, and close after an accepted request. Confirm final retirement/upload counters
+  drain; capture replacement output with RenderDoc/MCP while keeping validation evidence separate.
+  Once M2C-3 is accepted, plan M2D resource/allocation statistics and the minimal debug surface.
+  Preserve completed-use collection, bounded replacement ownership, per-slot upload reuse and
+  single-mip/generated-mip sampled-pixel regressions.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  resource retirement and the debug statistics panel remain M2C/M2D. RHI and additional
+  resource statistics and the debug panel remain M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

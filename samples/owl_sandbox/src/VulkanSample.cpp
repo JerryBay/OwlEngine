@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <iomanip>
 #include <numbers>
 #include <optional>
@@ -22,6 +23,43 @@ namespace owl::sandbox
         class MipSampleControls
         {
         public:
+            [[nodiscard]] bool UpdateTexture(const owl::platform::Platform& platform,
+                                             owl::vulkan::VulkanTriangle& renderer,
+                                             std::string& error)
+            {
+                const bool down = platform.IsKeyDown(owl::platform::Key::R);
+                const bool pressed = down && !replacementKeyDown_;
+                replacementKeyDown_ = down;
+                if (!pressed)
+                    return true;
+                // Sample-owned palettes. Each accepted request creates a new native image/set.
+                std::array<std::byte, 64 * 64 * 4> pixels;
+                for (std::size_t y = 0; y < 64; ++y)
+                {
+                    for (std::size_t x = 0; x < 64; ++x)
+                    {
+                        const auto offset = (y * 64 + x) * 4;
+                        const bool light = ((x / 8 + y / 8) % 2) == 0;
+                        const bool marker = x < 8 && y < 8;
+                        const auto rgb = marker         ? std::array{240, 40, 150}
+                                         : light        ? std::array{235, 240, 245}
+                                         : warmPalette_ ? std::array{210, 100, 25}
+                                                        : std::array{20, 140, 210};
+                        for (std::size_t channel = 0; channel < 3; ++channel)
+                            pixels[offset + channel] = static_cast<std::byte>(rgb[channel]);
+                        pixels[offset + 3] = std::byte{255};
+                    }
+                }
+                const auto result = renderer.RequestTextureReplacement(pixels, error);
+                if (result == owl::vulkan::TextureReplacementResult::Accepted)
+                    warmPalette_ = !warmPalette_;
+                else if (result == owl::vulkan::TextureReplacementResult::Busy)
+                    owl::foundation::LogMessage(
+                        owl::foundation::LogLevel::Info, "Texture Mips",
+                        "Texture replacement busy; press R again when ready.");
+                return result != owl::vulkan::TextureReplacementResult::Failed;
+            }
+
             [[nodiscard]] owl::vulkan::TextureDrawParameters
             Update(const owl::platform::Platform& platform, const double elapsedSeconds)
             {
@@ -88,7 +126,10 @@ namespace owl::sandbox
                     title << "Automatic LOD" << (paused_ ? " (paused)" : "") << ", scale "
                           << std::fixed << std::setprecision(3) << parameters.scale;
                 }
-                title << " | 0-6: LOD, A: Auto, Space: Pause";
+                title << " | Texture swaps " << stats.textureReplacements;
+                if (stats.textureReplacementPending)
+                    title << " (uploading)";
+                title << " | 0-6: LOD, A: Auto, Space: Pause, R: Texture";
                 return title.str();
             }
 
@@ -97,6 +138,8 @@ namespace owl::sandbox
             std::optional<float> explicitLod_ = 0.0F;
             double automaticSeconds_ = 0.0;
             bool paused_ = false;
+            bool replacementKeyDown_ = false;
+            bool warmPalette_ = false;
         };
 
         int RunVulkanWindow(const std::string_view name, owl::vulkan::VulkanTriangleOptions options)
@@ -168,7 +211,7 @@ namespace owl::sandbox
                                (stats.textureGpuMipGeneration ? "GPU blit." : "CPU filtering."));
                 LogMessage(LogLevel::Info, name,
                            "Controls: 0-6 select explicit LOD; A starts automatic LOD/zoom; "
-                           "Space pauses/resumes zoom.");
+                           "Space pauses/resumes zoom; R replaces the texture (blue/orange).");
             }
             MipSampleControls mipControls;
             auto previousFrame = std::chrono::steady_clock::now();
@@ -179,6 +222,11 @@ namespace owl::sandbox
                 owl::vulkan::TextureDrawParameters drawParameters;
                 if (mipSample)
                 {
+                    if (!mipControls.UpdateTexture(*platform, *renderer, error))
+                    {
+                        LogMessage(LogLevel::Error, name, error);
+                        return 4;
+                    }
                     const double elapsedSeconds =
                         std::chrono::duration<double>{frameStart - previousFrame}.count();
                     drawParameters = mipControls.Update(*platform, elapsedSeconds);
@@ -221,7 +269,12 @@ namespace owl::sandbox
                            ", completed serial: " + std::to_string(stats.completedSerial) +
                            ", frame upload capacity bytes: " +
                            std::to_string(stats.frameUploadCapacityBytes) +
-                           ", frame uploaded bytes: " + std::to_string(stats.frameUploadedBytes));
+                           ", frame uploaded bytes: " + std::to_string(stats.frameUploadedBytes) +
+                           ", texture replacements: " + std::to_string(stats.textureReplacements) +
+                           ", pending texture retirements: " +
+                           std::to_string(stats.pendingTextureRetirements) +
+                           ", texture replacement pending: " +
+                           (stats.textureReplacementPending ? "yes" : "no"));
             return 0;
         }
     } // namespace

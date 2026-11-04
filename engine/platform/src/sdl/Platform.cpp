@@ -120,6 +120,9 @@ namespace owl::platform
         case Key::Space:
             scancode = SDL_SCANCODE_SPACE;
             break;
+        case Key::R:
+            scancode = SDL_SCANCODE_R;
+            break;
         default:
             return false;
         }

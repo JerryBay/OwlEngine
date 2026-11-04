@@ -2,16 +2,17 @@
 
 #include "VulkanBuffer.h"
 #include "VulkanBufferUpload.h"
-#include "VulkanImage.h"
 #include "VulkanImageUpload.h"
-#include "VulkanImageView.h"
-#include "VulkanSampler.h"
+#include "VulkanResourceRetirement.h"
+#include "VulkanTextureBinding.h"
 #include <owl/vulkan/VulkanTriangle.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,7 @@ namespace owl::vulkan
     class VulkanUploadArena;
     struct TriangleShaderPaths;
 
-    // Borrows Device and Allocator. Caller finishes submitted draws and drains startup uploads
+    // Borrows Device and Allocator. Caller finishes submitted draws and drains all uploads
     // before destruction or format changes. Image, descriptor and geometry survive resize.
     class VulkanTexturedQuadPipeline
     {
@@ -52,6 +53,21 @@ namespace owl::vulkan
                                                 std::string& error) const;
         [[nodiscard]] std::uint32_t MipLevels() const noexcept;
         [[nodiscard]] bool UsesGpuMipGeneration() const noexcept;
+        [[nodiscard]] TextureReplacementResult
+        RequestTextureReplacement(const VulkanDevice& device, const VulkanAllocator& allocator,
+                                  std::span<const std::byte> rgba8, std::string& error);
+        // Call outside recording/submission, on the renderer thread. Completion belongs to
+        // the same graphics submission domain as RecordTextureSubmit. Does not wait.
+        [[nodiscard]] VkResult ProcessTextureReplacement(const VulkanDevice& device,
+                                                         std::uint64_t completedSerial,
+                                                         std::string& error);
+        // Call immediately after successful submit of commands using the current binding.
+        void RecordTextureSubmit(std::uint64_t serial) noexcept;
+        std::size_t CollectRetiredTextures(std::uint64_t completedSerial) noexcept;
+        [[nodiscard]] std::uint64_t TextureReplacements() const noexcept;
+        [[nodiscard]] std::uint64_t TextureLastUseSerial() const noexcept;
+        [[nodiscard]] std::size_t PendingTextureRetirements() const noexcept;
+        [[nodiscard]] bool TextureReplacementPending() const noexcept;
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
         [[nodiscard]] VkResult WaitForUpload(std::string& error);
         [[nodiscard]] VkResult DrainUploadForDestruction() noexcept;
@@ -71,14 +87,15 @@ namespace owl::vulkan
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanBuffer geometry_;
         std::vector<VulkanBuffer> streamedGeometry_;
-        std::optional<VulkanImage> image_;
-        std::optional<VulkanImageView> view_;
-        std::optional<VulkanSampler> sampler_;
+        std::unique_ptr<VulkanTextureBinding> textureBinding_;
+        static constexpr std::size_t MaxRetiredTextures = 4;
+        detail::ResourceRetirementQueue<VulkanTextureBinding, MaxRetiredTextures> retiredTextures_;
+        std::uint64_t textureLastUseSerial_ = 0;
+        std::uint64_t textureReplacements_ = 0;
+        TextureMipMode mipMode_ = TextureMipMode::SingleLevel;
         std::optional<VulkanBufferUpload> geometryUpload_;
         std::optional<VulkanImageUpload> imageUpload_;
         VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
-        VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-        VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
         VkPipelineLayout layout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;

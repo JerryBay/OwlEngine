@@ -40,6 +40,7 @@ namespace owl::platform
         Digit6,
         A,
         Space,
+        R,
     };
 
     class Platform

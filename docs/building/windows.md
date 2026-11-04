@@ -278,8 +278,8 @@ Expect five cases to pass. They check failed submits/waits, fence reuse, monoton
 initial no-submission state and exhaustion without wrapping to zero. No Vulkan window is needed.
 With the GPU opt-in and process-local validation environment above, the full CTest presets also
 verify progress through Clear/Triangle/Texture/mip frame loops, including minimize/restore,
-recreation, moves and both presentation modes. The current local full result is 145/145 for each
-VS2026 configuration, without skips or validation errors/warnings.
+recreation, moves and both presentation modes. The current local full result is 163/163 for each
+VS2026 configuration (M2C-3 Task 3), without skips or validation errors/warnings.
 
 Run any Vulkan Sandbox sample, render some frames, then exit normally. Its exit log includes
 `submitted serial` and `completed serial`; after successful WaitIdle they should be equal and
@@ -322,6 +322,10 @@ the title report the actual GPU-blit or CPU-filtering path. The image contains s
   original checkerboard; LOD 3 is an 8x8 image; LOD 6 is one averaged texel filling the quad.
 - **A** selects implicit LOD and starts a 16-second shrink/grow cycle from scale 1 to 1/128.
   Watch the reduced texture converge to its averaged color. **Space** pauses/resumes the zoom.
+- **R** requests a new texture, alternating blue/white and orange/white checkerboards with a
+  magenta origin marker. The title's `Texture swaps` count advances after publication. Try repeated
+  presses at LOD 0/6 and during automatic zoom; an accepted upload is bounded to one at a time.
+  If busy, the sample reports it and keeps the current binding; press again after completion.
 - Resize/minimize/restore, then exit with Escape or close. No texture re-upload or descriptor
   update occurs when changing the mode. Each submitted frame uploads 76 bytes of CPU-scaled
   vertices/indices through that slot's arena; the shader receives scale 1 and the selected LOD.
@@ -330,7 +334,26 @@ On normal exit, `frame upload capacity bytes` should be 131072 (two fixed 64 KiB
 `frame uploaded bytes` should equal 76 times `Submitted`. Capacity counts logical staging bytes,
 not destination storage or VMA reserved memory. Startup uploads and alignment padding do not
 count toward uploaded payload bytes. Static Clear/Triangle/Texture paths report zero for both.
-The visible mip controls are unchanged; this step exercises a new geometry data path.
+Texture replacement uploads have their own completion fence and do not count as frame geometry
+bytes or frame submissions. On normal exit, `pending texture retirements` should be 0 and
+`texture replacement pending` should be `no`. Try resize/minimize/restore while replacing, then
+close immediately after R to exercise the upload and retirement drain.
+
+Replacement publishes a new Image/View/Sampler/Descriptor Set after its upload completes; it
+does not edit a pending descriptor. The old binding waits for its last successful graphics-use
+serial. Steady-state replacement polls completion without queue/device-idle waits; existing
+resize/shutdown waits remain. CPU preparation and native allocation may still have a cost.
+
+For automated replacement, pixel readback and bounded retirement checks, build first and run
+with the GPU opt-in and process-local validation setup above:
+
+```powershell
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[texture-replacement]'
+```
+
+The public renderer request is deliberately sample-local: exactly 64x64 packed RGBA8 UNORM,
+using the current mip policy, with input copied before `Accepted`. It is not a general texture API.
+Automated tests do not establish manual R-key or new RenderDoc acceptance.
 
 Sampling within each level stays nearest; fractional LOD blends adjacent levels. This makes
 individual mip texels visible and avoids adding a spatial linear-filtering requirement.

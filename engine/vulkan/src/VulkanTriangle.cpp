@@ -221,6 +221,7 @@ namespace owl::vulkan
                 if (!WaitFence(slot.complete, "vkWaitForFences(submit)", error))
                     return false;
                 submissionProgress.RecordWaitResult(slot, VK_SUCCESS);
+                texture.CollectRetiredTextures(submissionProgress.CompletedSerial());
             }
             if (slot.acquisitionPending)
             {
@@ -270,6 +271,11 @@ namespace owl::vulkan
             for (auto& slot : frames.slots)
                 if (!WaitSlot(slot, error))
                     return false;
+            if (!failed && mode == SampleMode::Texture &&
+                !Check(texture.ProcessTextureReplacement(
+                           device, submissionProgress.CompletedSerial(), error),
+                       "ProcessTextureReplacement", error))
+                return false;
             bool anyPresent = false;
             for (auto& image : frames.images)
             {
@@ -475,6 +481,11 @@ namespace owl::vulkan
             auto& slot = frames.slots[frameIndex];
             if (!WaitSlot(slot, error))
                 return FrameResult::Failed;
+            if (mode == SampleMode::Texture &&
+                !Check(texture.ProcessTextureReplacement(
+                           device, submissionProgress.CompletedSerial(), error),
+                       "ProcessTextureReplacement", error))
+                return FrameResult::Failed;
             if (!submissionProgress.CanSubmit(slot))
             {
                 failed = true;
@@ -561,6 +572,8 @@ namespace owl::vulkan
                 // Keep successful native work owned before diagnostics or Present can fail.
                 if (slot.uploadArena)
                     slot.uploadArena->MarkSubmitted(slot.submissionSerial);
+                if (mode == SampleMode::Texture)
+                    texture.RecordTextureSubmit(slot.submissionSerial);
                 stats.frameUploadedBytes = *nextUploadedBytes;
             }
             if (!Check(submitResult, "vkQueueSubmit2", error))
@@ -724,6 +737,18 @@ namespace owl::vulkan
         }
         return impl_->RenderFrame(error, parameters);
     }
+    TextureReplacementResult
+    VulkanTriangle::RequestTextureReplacement(const std::span<const std::byte> rgba8,
+                                              std::string& error)
+    {
+        if (!IsValid() || impl_->mode != Impl::SampleMode::Texture)
+        {
+            error = "Texture replacement requires a valid textured renderer";
+            return TextureReplacementResult::Failed;
+        }
+        return impl_->texture.RequestTextureReplacement(impl_->device, impl_->allocator, rgba8,
+                                                        error);
+    }
     bool VulkanTriangle::WaitIdle(std::string& error)
     {
         error.clear();
@@ -736,6 +761,12 @@ namespace owl::vulkan
         auto snapshot = impl_->stats;
         snapshot.submittedSerial = impl_->submissionProgress.SubmittedSerial();
         snapshot.completedSerial = impl_->submissionProgress.CompletedSerial();
+        snapshot.textureReplacements = impl_->texture.TextureReplacements();
+        snapshot.textureLastUseSerial = impl_->texture.TextureLastUseSerial();
+        snapshot.pendingTextureRetirements = impl_->texture.PendingTextureRetirements();
+        snapshot.textureReplacementPending = impl_->texture.TextureReplacementPending();
+        if (impl_->mode == Impl::SampleMode::Texture)
+            snapshot.textureGpuMipGeneration = impl_->texture.UsesGpuMipGeneration();
         return snapshot;
     }
 } // namespace owl::vulkan
