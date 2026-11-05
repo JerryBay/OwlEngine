@@ -48,9 +48,16 @@ inspection of streamed LOD-0 frames. M2C-3 now provides a bounded CPU retirement
 immutable texture binding that owns its image, view, sampler and descriptor allocation independently
 of the draw pipeline. Runtime replacement now submits a bounded upload, publishes a new binding
 after completion and retires the old one by its last successful graphics-use serial. Press R in
-either mip sample to switch texture palettes. Both VS2026 configurations pass the current full
-suite, 163/163 with actual synchronization validation and zero errors/warnings. New manual/capture
-acceptance and M2D statistics remain. See the
+either mip sample to switch texture palettes. The M2C-3 checkpoint passed 163/163 tests in both
+VS2026 configurations with actual synchronization validation and zero errors/warnings. Local acceptance
+now includes user-reported controls, drained replacement counters and GPU LOD-0 capture; the
+project record distinguishes missing CPU replacement captures and window-recreation evidence.
+M2D-1 now exposes explicit VMA allocation/block statistics and event-triggered Sandbox logs.
+The M2D-1 checkpoint passed 165/165 tests in both VS2026 configurations with synchronization
+validation and zero errors/warnings. A later test cleanup reduced the current suite to 153 cases;
+the affected 14 Debug cases passed with validation. User-confirmed GPU/CPU mip runs returned to their startup live-allocation
+baseline after 21/14 replacements, with normal exit and zero validation errors/warnings. See the
+[memory statistics design](docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md),
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
@@ -83,6 +90,16 @@ ctest --preset windows-vs2022-debug
 ./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample texture-mips
 # Use --sample texture-mips-cpu to compare CPU-generated mips.
 ```
+
+The Vulkan samples print `VMA memory` at startup and after WaitIdle on exit. In either mip sample,
+press R to observe allocation changes during upload, replacement and retirement. Live allocation
+count/bytes should return to the startup baseline after drain; reserved block bytes can stay cached.
+These are this allocator's totals, not whole-process VRAM usage. Clear reports unavailable because
+it has no VMA allocator. The renderer's active resources still exist at the exit snapshot.
+
+For daily changes, build Debug and select the affected tests. Full dual-configuration regression
+belongs to milestone acceptance or configuration-sensitive work. See
+[test selection and retained coverage](docs/building/windows.md#choose-tests-for-the-change).
 
 See [Windows build instructions](docs/building/windows.md) for prerequisites, clean reconfigure,
 and troubleshooting guidance.

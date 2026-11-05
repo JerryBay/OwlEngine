@@ -57,6 +57,54 @@ Catch2 discovers tests at test time with a separate list per build configuration
 Debug and RelWithDebInfo executable paths independent when both configurations have been built.
 Add `-N -V` to a CTest command to inspect its selected executable paths without running tests.
 
+### Choose Tests for the Change
+
+Use a Debug build and the directly affected tests for routine development. Documentation-only
+changes need a diff/link check; formatting changes need only the relevant format/build check.
+Synchronization, upload and resource-lifetime changes require the related real-GPU tests with
+validation. Reserve a full regression for cross-module changes or a milestone acceptance;
+use both configurations at milestone acceptance or when configuration/optimization behavior
+is relevant. Do not repeat a passing suite for unchanged code or subsequent documentation edits.
+Manual controls and RenderDoc checks belong to new visible behavior or a concrete rendering issue.
+
+Existing Catch2 tags select focused coverage without adding test executables:
+
+```powershell
+cmake --build --preset windows-vs2026-debug --target OwlUnitTests
+# Example: command-line behavior only.
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[command-line]'
+# Example: the six representative frame-lifecycle cases, after enabling GPU tests/validation.
+./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[frame-lifecycle]'
+```
+
+The latter opens test windows. Direct execution requires checking validation output as described
+below. CI's default CTest invocation skips opt-in GPU cases; it does not replace local GPU evidence.
+
+### Current Coverage After Consolidation
+
+The 2026-11-05 cleanup reduces discovered tests from 165 to 153. Command-line cases use one
+sample table for routing and trailing-argument checks (14 cases become 7, retaining all sample
+names). Five standalone GPU cases were removed:
+
+| Removed case | Retained coverage |
+| --- | --- |
+| Instance/Surface-only bootstrap | Device bootstrap creates both parents and verifies their lifetime through device moves and destruction |
+| Single-level texture window lifecycle without replacement | Single-level replacement lifecycle now draws the startup texture before requesting replacements |
+| Static CPU mip window lifecycle | Static GPU mip WSI lifecycle, CPU mip pixel readback and CPU streaming/replacement WSI lifecycle |
+| GPU streamed window lifecycle without replacement | GPU streamed replacement lifecycle, including upload counters and allocation baseline checks |
+| CPU streamed window lifecycle without replacement | CPU streamed replacement lifecycle, including upload counters and allocation baseline checks |
+
+Frame-lifecycle combinations are now six instead of ten: Clear, Triangle, static GPU mips,
+single-level replacement, streamed GPU replacement and streamed CPU replacement. Each retains
+automatic present fences and forced compatibility mode. The static-CPU-mips/full-WSI combination
+is intentionally no longer repeated; CPU mip correctness and static geometry remain covered in
+their respective tests. GPU/CPU pixel readback, upload stress, retirement and memory checks remain.
+
+After consolidation, the Debug test target built and the affected 14 cases passed with actual
+synchronization validation, no skips and no validation errors/warnings. Discovery confirms 153
+current tests; the earlier 165/165 dual-configuration result is the pre-cleanup baseline, not a
+new full run. Local evidence is under `build/diagnostics/test-pruning-20261105/` (ignored).
+
 ## Local Vulkan Integration Tests
 
 On a Vulkan 1.3-capable machine with an interactive desktop, opt in to the bootstrap tests:
@@ -256,7 +304,8 @@ To check the integrated streaming path with the same GPU/validation environment:
 ./build/windows-vs2026/tests/Debug/OwlUnitTests.exe '[frame-upload],[upload-arena][stress],[streaming]'
 ```
 
-Expect seven cases: four frame-upload cases, one 64-batch dual-slot stress case and two streamed pixel cases.
+Expect seven cases: two frame-upload policy cases, two streamed replacement lifecycle cases,
+one 64-batch dual-slot stress case and two streamed pixel cases.
 The stress case verifies distinct aligned/odd payloads by GPU readback, stale completion rejection,
 stable source handles/capacity/allocation count and cleanup to the VMA baseline. The pixel cases
 cover full/half-size geometry, explicit LOD 0/6 and implicit minification for both GPU-generated and

@@ -19,6 +19,30 @@ namespace owl::sandbox
 {
     namespace
     {
+        void LogMemoryStats(const owl::vulkan::VulkanTriangle& renderer,
+                            const std::string_view name, const std::string_view reason,
+                            const owl::vulkan::VulkanTriangleStats& stats)
+        {
+            const auto memory = renderer.QueryMemoryStats();
+            std::ostringstream message;
+            message << "VMA memory [" << reason << "]: ";
+            if (memory)
+            {
+                message << "allocations=" << memory->allocationCount
+                        << ", allocation bytes=" << memory->allocationBytes
+                        << ", blocks=" << memory->blockCount
+                        << ", reserved block bytes=" << memory->blockBytes
+                        << "; texture replacements=" << stats.textureReplacements
+                        << ", pending upload=" << (stats.textureReplacementPending ? "yes" : "no")
+                        << ", pending retirements=" << stats.pendingTextureRetirements;
+            }
+            else
+            {
+                message << "unavailable (no active VMA allocator)";
+            }
+            owl::foundation::LogMessage(owl::foundation::LogLevel::Info, name, message.str());
+        }
+
         // Sample-only controls. The renderer receives draw data and owns no input or clock.
         class MipSampleControls
         {
@@ -213,6 +237,19 @@ namespace owl::sandbox
                            "Controls: 0-6 select explicit LOD; A starts automatic LOD/zoom; "
                            "Space pauses/resumes zoom; R replaces the texture (blue/orange).");
             }
+            auto lastMemoryEvent = renderer->Stats();
+            LogMemoryStats(*renderer, name, "startup", lastMemoryEvent);
+            const auto logMemoryChanges = [&]
+            {
+                const auto stats = renderer->Stats();
+                if (stats.textureReplacements != lastMemoryEvent.textureReplacements ||
+                    stats.textureReplacementPending != lastMemoryEvent.textureReplacementPending ||
+                    stats.pendingTextureRetirements != lastMemoryEvent.pendingTextureRetirements)
+                {
+                    LogMemoryStats(*renderer, name, "texture state", stats);
+                    lastMemoryEvent = stats;
+                }
+            };
             MipSampleControls mipControls;
             auto previousFrame = std::chrono::steady_clock::now();
             std::string currentTitle;
@@ -227,6 +264,8 @@ namespace owl::sandbox
                         LogMessage(LogLevel::Error, name, error);
                         return 4;
                     }
+                    // Observe accepted upload storage before RenderFrame can publish it.
+                    logMemoryChanges();
                     const double elapsedSeconds =
                         std::chrono::duration<double>{frameStart - previousFrame}.count();
                     drawParameters = mipControls.Update(*platform, elapsedSeconds);
@@ -249,6 +288,8 @@ namespace owl::sandbox
                     return 4;
                 }
 
+                logMemoryChanges();
+
                 // Sample pacing also prevents a busy loop while the drawable is unavailable.
                 std::this_thread::sleep_until(frameStart + std::chrono::milliseconds{16});
             }
@@ -260,6 +301,7 @@ namespace owl::sandbox
             }
 
             const auto stats = renderer->Stats();
+            LogMemoryStats(*renderer, name, "after WaitIdle", stats);
             LogMessage(LogLevel::Info, name,
                        "Submitted: " + std::to_string(stats.submittedFrames) +
                            ", presented: " + std::to_string(stats.presentedFrames) +

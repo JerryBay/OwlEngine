@@ -2,6 +2,7 @@
 
 #include "VulkanDevice.h"
 
+#include <array>
 #include <utility>
 
 namespace owl::vulkan
@@ -63,6 +64,28 @@ namespace owl::vulkan
     bool VulkanAllocator::IsValid() const noexcept { return allocator_ != VK_NULL_HANDLE; }
     VmaAllocator VulkanAllocator::Get() const noexcept { return allocator_; }
     VkDevice VulkanAllocator::Device() const noexcept { return device_; }
+
+    std::optional<VulkanMemoryStats> VulkanAllocator::QueryMemoryStats() const noexcept
+    {
+        if (!IsValid())
+            return std::nullopt;
+
+        const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+        vmaGetMemoryProperties(allocator_, &properties);
+        std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> heaps{};
+        vmaGetHeapBudgets(allocator_, heaps.data());
+        VulkanMemoryStats result;
+        for (std::uint32_t index = 0; index < properties->memoryHeapCount; ++index)
+        {
+            // Only allocator-owned statistics; usage/budget describe a different scope.
+            const auto& statistics = heaps[index].statistics;
+            result.allocationCount += statistics.allocationCount;
+            result.allocationBytes += statistics.allocationBytes;
+            result.blockCount += statistics.blockCount;
+            result.blockBytes += statistics.blockBytes;
+        }
+        return result;
+    }
 
     void VulkanAllocator::Reset() noexcept
     {

@@ -307,6 +307,29 @@ namespace
         INFO(error);
         REQUIRE(renderer);
         REQUIRE(renderer->IsValid());
+        const auto memoryBaseline = renderer->QueryMemoryStats();
+        if (mode == SampleMode::Clear)
+        {
+            CHECK_FALSE(memoryBaseline);
+        }
+        else
+        {
+            REQUIRE(memoryBaseline);
+            CHECK(memoryBaseline->allocationCount > 0);
+            CHECK(memoryBaseline->allocationBytes > 0);
+            CHECK(memoryBaseline->blockBytes >= memoryBaseline->allocationBytes);
+        }
+        const auto checkDrainedMemory = [&]
+        {
+            const auto memory = renderer->QueryMemoryStats();
+            REQUIRE(memory.has_value() == memoryBaseline.has_value());
+            if (memory)
+            {
+                CHECK(memory->allocationCount == memoryBaseline->allocationCount);
+                CHECK(memory->allocationBytes == memoryBaseline->allocationBytes);
+                CHECK(memory->blockBytes >= memory->allocationBytes);
+            }
+        };
         CHECK(renderer->Stats().submittedSerial == 0);
         CHECK(renderer->Stats().completedSerial == 0);
         const std::uint64_t expectedUploadCapacity = streamGeometry ? 2 * 64 * 1024 : 0;
@@ -324,13 +347,27 @@ namespace
             CHECK(renderer->RequestTextureReplacement(replacementPixels, error) ==
                   owl::vulkan::TextureReplacementResult::Busy);
             CHECK(error.empty());
+            const auto progressBeforeQuery = renderer->Stats();
+            const auto pendingMemory = renderer->QueryMemoryStats();
+            REQUIRE(pendingMemory);
+            // Request retains both the new image and staging, even if the GPU already finished.
+            CHECK(pendingMemory->allocationCount >= memoryBaseline->allocationCount + 2);
+            CHECK(pendingMemory->allocationBytes > memoryBaseline->allocationBytes);
+            CHECK(pendingMemory->blockBytes >= pendingMemory->allocationBytes);
+            const auto progressAfterQuery = renderer->Stats();
+            CHECK(progressAfterQuery.submittedSerial == progressBeforeQuery.submittedSerial);
+            CHECK(progressAfterQuery.completedSerial == progressBeforeQuery.completedSerial);
+            CHECK(progressAfterQuery.textureReplacements ==
+                  progressBeforeQuery.textureReplacements);
+            CHECK(progressAfterQuery.pendingTextureRetirements ==
+                  progressBeforeQuery.pendingTextureRetirements);
+            CHECK(progressAfterQuery.textureReplacementPending);
         };
         if (replaceTextures)
         {
             CHECK(renderer->RequestTextureReplacement({}, error) ==
                   owl::vulkan::TextureReplacementResult::Failed);
             CHECK(renderer->IsValid());
-            requestReplacement();
         }
         else if (mode == SampleMode::Clear || mode == SampleMode::Triangle)
         {
@@ -388,7 +425,8 @@ namespace
                         parameters.scale = 1.0F / 128;
                 }
                 const auto before = renderer->Stats();
-                if (replaceTextures && acceptedReplacements < 32 &&
+                // Cover the original startup texture before exercising replacement ownership.
+                if (replaceTextures && before.submittedFrames > 0 && acceptedReplacements < 32 &&
                     !before.textureReplacementPending)
                     requestReplacement();
                 const auto result = renderer->RenderFrame(error, parameters);
@@ -430,14 +468,26 @@ namespace
             REQUIRE(acceptedReplacements == 32);
             REQUIRE(renderer->WaitIdle(error));
             CHECK(renderer->Stats().textureReplacements == acceptedReplacements);
+            checkDrainedMemory();
             requestReplacement(); // Preserve accepted work through renderer moves.
         }
         if (mode == SampleMode::TextureMips || mode == SampleMode::TextureMipsCpu)
             checkInvalidDraw();
         const auto initial = renderer->Stats();
+        const auto memoryBeforeMove = renderer->QueryMemoryStats();
         REQUIRE(initial.indexedDraws == (mode != SampleMode::Clear ? initial.submittedFrames : 0));
         owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
         CHECK_FALSE(renderer->IsValid());
+        CHECK_FALSE(renderer->QueryMemoryStats());
+        const auto movedMemory = moved.QueryMemoryStats();
+        REQUIRE(movedMemory.has_value() == memoryBeforeMove.has_value());
+        if (movedMemory)
+        {
+            CHECK(movedMemory->allocationCount == memoryBeforeMove->allocationCount);
+            CHECK(movedMemory->allocationBytes == memoryBeforeMove->allocationBytes);
+            CHECK(movedMemory->blockCount == memoryBeforeMove->blockCount);
+            CHECK(movedMemory->blockBytes == memoryBeforeMove->blockBytes);
+        }
         CHECK(renderer->Stats().submittedSerial == 0);
         CHECK(renderer->Stats().completedSerial == 0);
         CHECK(renderer->Stats().frameUploadCapacityBytes == 0);
@@ -446,6 +496,16 @@ namespace
         CHECK(moved.Stats().frameUploadCapacityBytes == initial.frameUploadCapacityBytes);
         CHECK(moved.Stats().frameUploadedBytes == initial.frameUploadedBytes);
         *renderer = std::move(moved);
+        CHECK_FALSE(moved.QueryMemoryStats());
+        const auto assignedMemory = renderer->QueryMemoryStats();
+        REQUIRE(assignedMemory.has_value() == memoryBeforeMove.has_value());
+        if (assignedMemory)
+        {
+            CHECK(assignedMemory->allocationCount == memoryBeforeMove->allocationCount);
+            CHECK(assignedMemory->allocationBytes == memoryBeforeMove->allocationBytes);
+            CHECK(assignedMemory->blockCount == memoryBeforeMove->blockCount);
+            CHECK(assignedMemory->blockBytes == memoryBeforeMove->blockBytes);
+        }
         if (replaceTextures)
             CHECK(renderer->Stats().textureReplacementPending);
         CHECK_FALSE(moved.IsValid());
@@ -489,6 +549,7 @@ namespace
         renderFrames(120);
         const auto beforeIdle = renderer->Stats();
         REQUIRE(renderer->WaitIdle(error));
+        checkDrainedMemory();
         if (replaceTextures)
         {
             CHECK(renderer->Stats().textureReplacements == acceptedReplacements);
@@ -510,12 +571,14 @@ namespace
     }
 } // namespace
 
-TEST_CASE("Vulkan clear frames resize and recover locally", "[vulkan][integration][frame]")
+TEST_CASE("Vulkan clear frames resize and recover locally",
+          "[vulkan][integration][frame][frame-lifecycle]")
 {
     RunLocalFrames(SampleMode::Clear);
 }
 
-TEST_CASE("Vulkan triangle frames resize and recover locally", "[vulkan][integration][triangle]")
+TEST_CASE("Vulkan triangle frames resize and recover locally",
+          "[vulkan][integration][triangle][frame-lifecycle]")
 {
     RunLocalFrames(SampleMode::Triangle);
 }
@@ -530,48 +593,25 @@ TEST_CASE("Empty renderer rejects texture replacement", "[vulkan][texture-replac
 }
 
 TEST_CASE("Single-level texture replacement survives frame lifecycle",
-          "[vulkan][integration][texture-replacement]")
+          "[vulkan][integration][texture-replacement][frame-lifecycle]")
 {
     RunLocalFrames(SampleMode::Texture, false, true);
 }
 
 TEST_CASE("GPU mip texture replacement survives streaming and frame lifecycle",
-          "[vulkan][integration][texture-replacement]")
+          "[vulkan][integration][texture-replacement][frame-lifecycle][frame-upload]")
 {
     RunLocalFrames(SampleMode::TextureMips, true, true);
 }
 
 TEST_CASE("CPU mip texture replacement survives streaming and frame lifecycle",
-          "[vulkan][integration][texture-replacement]")
+          "[vulkan][integration][texture-replacement][frame-lifecycle][frame-upload]")
 {
     RunLocalFrames(SampleMode::TextureMipsCpu, true, true);
 }
 
-TEST_CASE("Vulkan texture frames resize and recover locally", "[vulkan][integration][texture]")
-{
-    RunLocalFrames(SampleMode::Texture);
-}
-
 TEST_CASE("Vulkan mip texture frames resize and recover locally",
-          "[vulkan][integration][texture][mip]")
+          "[vulkan][integration][texture][mip][frame-lifecycle]")
 {
     RunLocalFrames(SampleMode::TextureMips);
-}
-
-TEST_CASE("Vulkan CPU mip texture frames resize and recover locally",
-          "[vulkan][integration][texture][mip]")
-{
-    RunLocalFrames(SampleMode::TextureMipsCpu);
-}
-
-TEST_CASE("Vulkan streamed mip texture frames preserve bounded upload storage",
-          "[vulkan][integration][texture][mip][frame-upload]")
-{
-    RunLocalFrames(SampleMode::TextureMips, true);
-}
-
-TEST_CASE("Vulkan streamed CPU mip texture frames preserve bounded upload storage",
-          "[vulkan][integration][texture][mip][frame-upload]")
-{
-    RunLocalFrames(SampleMode::TextureMipsCpu, true);
 }

@@ -754,6 +754,13 @@ namespace owl::vulkan
         error.clear();
         return !impl_ || impl_->WaitIdle(error);
     }
+    std::optional<VulkanMemoryStats> VulkanTriangle::QueryMemoryStats() const noexcept
+    {
+        if (!IsValid())
+            return std::nullopt;
+        return impl_->allocator.QueryMemoryStats();
+    }
+
     VulkanTriangleStats VulkanTriangle::Stats() const noexcept
     {
         if (!impl_)

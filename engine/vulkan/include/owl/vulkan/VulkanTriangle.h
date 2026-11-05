@@ -1,5 +1,7 @@
 #pragma once
 
+#include <owl/vulkan/VulkanMemoryStats.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -115,6 +117,9 @@ namespace owl::vulkan
         [[nodiscard]] TextureReplacementResult
         RequestTextureReplacement(std::span<const std::byte> rgba8, std::string& error);
         [[nodiscard]] VulkanTriangleStats Stats() const noexcept;
+        // Explicit allocator query, separate from cheap frame counters. No GPU wait or collection.
+        // Unavailable for empty/failed owners and Clear, which has no VMA allocator.
+        [[nodiscard]] std::optional<VulkanMemoryStats> QueryMemoryStats() const noexcept;
 
     private:
         struct Impl;

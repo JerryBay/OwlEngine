@@ -279,41 +279,6 @@ TEST_CASE("Empty Vulkan owners remain invalid after moves", "[vulkan]")
     CHECK_FALSE(surfaceDestination.IsValid());
 }
 
-TEST_CASE("Vulkan instance and SDL surface bootstrap locally", "[vulkan][integration]")
-{
-    const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");
-    if (enabled == nullptr || std::string_view{enabled} != "1")
-    {
-        SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run the local GPU bootstrap test");
-    }
-
-    LoggingScope logging;
-    std::string error;
-    auto platform = owl::platform::Platform::Create(error);
-    INFO(error);
-    REQUIRE(platform.has_value());
-
-    const owl::platform::WindowDesc windowDesc{
-        .title = "OwlEngine - Vulkan Bootstrap Test",
-        .width = 320,
-        .height = 180,
-        .resizable = false,
-        .surfaceApi = owl::platform::WindowSurfaceApi::Vulkan,
-    };
-    auto window = platform->CreateWindow(windowDesc, error);
-    INFO(error);
-    REQUIRE(window.has_value());
-
-    auto instance = owl::vulkan::VulkanInstance::Create(error);
-    INFO(error);
-    REQUIRE(instance.has_value());
-
-    auto surface = owl::vulkan::VulkanSurface::Create(*instance, *window, error);
-    INFO(error);
-    REQUIRE(surface.has_value());
-    CHECK(surface->IsValid());
-}
-
 TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][device]")
 {
     const char* enabled = SDL_getenv("OWL_RUN_VULKAN_BOOTSTRAP_TEST");

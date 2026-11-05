@@ -9,6 +9,24 @@
 using owl::foundation::Command;
 using owl::foundation::ParseCommandLine;
 
+namespace
+{
+    struct SampleCommand
+    {
+        std::string_view name;
+        Command command;
+    };
+
+    constexpr std::array SampleCommands{
+        SampleCommand{"smoke", Command::Smoke},
+        SampleCommand{"clear", Command::Clear},
+        SampleCommand{"triangle", Command::Triangle},
+        SampleCommand{"texture", Command::Texture},
+        SampleCommand{"texture-mips", Command::TextureMips},
+        SampleCommand{"texture-mips-cpu", Command::TextureMipsCpu},
+    };
+} // namespace
+
 TEST_CASE("No arguments selects smoke", "[command-line]")
 {
     const auto parsed = ParseCommandLine(std::span<const std::string_view>{});
@@ -24,15 +42,16 @@ TEST_CASE("Help option selects help", "[command-line]")
     CHECK(parsed.error.empty());
 }
 
-TEST_CASE("Smoke sample selects smoke", "[command-line]")
+TEST_CASE("Sample names select distinct commands", "[command-line]")
 {
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"smoke"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Smoke);
-    CHECK(parsed.error.empty());
+    for (const auto& sample : SampleCommands)
+    {
+        CAPTURE(sample.name);
+        const std::array arguments{std::string_view{"--sample"}, sample.name};
+        const auto parsed = ParseCommandLine(arguments);
+        CHECK(parsed.command == sample.command);
+        CHECK(parsed.error.empty());
+    }
 }
 
 TEST_CASE("Missing sample name is invalid", "[command-line]")
@@ -43,111 +62,13 @@ TEST_CASE("Missing sample name is invalid", "[command-line]")
     CHECK(parsed.error == "missing sample name after --sample");
 }
 
-TEST_CASE("Clear sample is accepted as a distinct command", "[command-line]")
+TEST_CASE("Samples reject trailing arguments", "[command-line]")
 {
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"clear"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Clear);
-    CHECK(parsed.error.empty());
-}
-
-TEST_CASE("Clear sample rejects trailing arguments", "[command-line]")
-{
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"clear"},
-        std::string_view{"unexpected"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Invalid);
-    CHECK_FALSE(parsed.error.empty());
-}
-
-TEST_CASE("Triangle sample is accepted as a distinct command", "[command-line]")
-{
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"triangle"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Triangle);
-    CHECK(parsed.error.empty());
-}
-
-TEST_CASE("Triangle sample rejects trailing arguments", "[command-line]")
-{
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"triangle"},
-        std::string_view{"unexpected"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Invalid);
-    CHECK_FALSE(parsed.error.empty());
-}
-
-TEST_CASE("Texture sample is accepted as a distinct command", "[command-line]")
-{
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"texture"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Texture);
-    CHECK(parsed.error.empty());
-}
-
-TEST_CASE("Texture sample rejects trailing arguments", "[command-line]")
-{
-    constexpr std::array arguments{
-        std::string_view{"--sample"},
-        std::string_view{"texture"},
-        std::string_view{"unexpected"},
-    };
-    const auto parsed = ParseCommandLine(arguments);
-    CHECK(parsed.command == Command::Invalid);
-    CHECK_FALSE(parsed.error.empty());
-}
-
-TEST_CASE("Mip texture samples select distinct commands", "[command-line]")
-{
-    SECTION("Format-gated GPU generation")
+    for (const auto& sample : SampleCommands)
     {
-        constexpr std::array arguments{
-            std::string_view{"--sample"},
-            std::string_view{"texture-mips"},
-        };
-        const auto parsed = ParseCommandLine(arguments);
-        CHECK(parsed.command == Command::TextureMips);
-        CHECK(parsed.error.empty());
-    }
-
-    SECTION("Forced CPU generation")
-    {
-        constexpr std::array arguments{
-            std::string_view{"--sample"},
-            std::string_view{"texture-mips-cpu"},
-        };
-        const auto parsed = ParseCommandLine(arguments);
-        CHECK(parsed.command == Command::TextureMipsCpu);
-        CHECK(parsed.error.empty());
-    }
-}
-
-TEST_CASE("Mip texture samples reject trailing arguments", "[command-line]")
-{
-    for (const auto sample :
-         {std::string_view{"texture-mips"}, std::string_view{"texture-mips-cpu"}})
-    {
-        CAPTURE(sample);
-        const std::array arguments{
-            std::string_view{"--sample"},
-            sample,
-            std::string_view{"unexpected"},
-        };
+        CAPTURE(sample.name);
+        const std::array arguments{std::string_view{"--sample"}, sample.name,
+                                   std::string_view{"unexpected"}};
         const auto parsed = ParseCommandLine(arguments);
         CHECK(parsed.command == Command::Invalid);
         CHECK_FALSE(parsed.error.empty());

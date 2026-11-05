@@ -2,6 +2,8 @@
 
 #include "VulkanMemory.h"
 
+#include <owl/vulkan/VulkanMemoryStats.h>
+
 #include <optional>
 #include <string>
 
@@ -26,6 +28,8 @@ namespace owl::vulkan
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] VmaAllocator Get() const noexcept;
         [[nodiscard]] VkDevice Device() const noexcept;
+        // Host observation only; does not submit, wait or release allocations.
+        [[nodiscard]] std::optional<VulkanMemoryStats> QueryMemoryStats() const noexcept;
 
     private:
         void Reset() noexcept;

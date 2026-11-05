@@ -13,9 +13,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Goal: Build a long-lived open-source rendering engine for learning modern graphics APIs, RHI
   design, and modern rendering architecture through production-quality code.
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
-- Current phase: M2 GPU resources; M2C-2 frame-slot uploads are accepted locally. M2C-3 Tasks 1-3
-  retirement ownership, native texture bindings and runtime replacement pass local automated
-  verification. R-key/manual and new RenderDoc acceptance remain before closing M2C-3.
+- Current phase: M2 GPU resources; M2C-3 local acceptance now combines automated verification,
+  user-reported controls, drained shutdown statistics and GPU replacement LOD-0 capture. Evidence
+  limits remain explicit below. M2D-1 allocator snapshots and event-triggered logs are implemented,
+  with local automated and sample R/exit log acceptance complete.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -140,7 +141,34 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     paths retain the existing destruction contract. Both mip samples expose R palette switching,
     replacement count, pending request and retirement counters. No steady-state GPU idle wait is
     introduced; CPU preparation and allocation costs remain, and the request is not a general API.
+  - M2D-1 public value-only `VulkanMemoryStats` and explicit optional queries on Allocator/Renderer
+    report allocation count/bytes and reserved block count/bytes across VMA heaps. Queries do not
+    submit, wait or collect. Clear/empty/failed owners report unavailable. Sandbox logs startup,
+    observed upload/replacement/retirement changes and post-WaitIdle values; active resources still
+    exist at that exit snapshot. Native budgets, classification and ImGui remain later.
 - Verified:
+  - 2026-11-05, test consolidation: removed five standalone GPU cases and combined command-line
+    routing/trailing-argument cases; CTest discovery now reports 153 cases (previously 165).
+    Frame-lifecycle combinations decreased from ten to six, retaining both presentation modes.
+    Debug test-target build and the affected 14 cases passed with actual synchronization validation,
+    no skips and zero validation errors/warnings. No full suite, second configuration or manual
+    replay was repeated. Coverage tradeoffs and selective-test policy are in the Windows build guide.
+  - 2026-11-05, M2D-1: focused red/green verified missing-query detection, then eight cases /
+    30694 assertions passed. Final full VS2026 Debug/RelWithDebInfo builds and opt-in CTest passed
+    165/165 each, no skips, real Khronos synchronization/submit-time validation and zero validation
+    errors/warnings. Tests cover independent native totals, buffer/image release, wrapper/renderer
+    moves, query side effects and stable live allocation baselines after repeated texture swaps.
+    User-confirmed Debug GPU/CPU mip runs independently logged 21/14 replacements and exit 0;
+    all drained observations returned to five allocations / 154784 allocation bytes, with zero
+    validation errors/warnings. Detailed scope, transitions and logs are in the M2D-1 design.
+  - 2026-11-05, M2C-3 acceptance on `c6083e5`: the user confirmed both mip samples, including a
+    focused CPU retry. GPU/CPU retry exited 0 after 4/5 replacements, matching submitted/completed
+    serials 4216/3372, zero pending retirements/uploads and exact 76-byte-per-frame payload totals.
+    RenderDoc 1.43/MCP confirms the GPU draw samples the new seven-mip image and renders its blue
+    checkerboard/magenta marker at LOD 0. CPU replacement/LOD-6 captures are absent. Manual logs
+    retained swapchain generation 1, so recreation evidence remains the automated tests. Capture
+    runs mute validation; separate 2026-11-04 CTest results remain authoritative for synchronization.
+    No source/build/test rerun. Detailed scope is in the runtime replacement plan.
   - 2026-11-04, M2C-3 Task 3: buildable stubs failed 6 focused cases / 13 assertions at missing
     replacement, last-use and Poll behavior; 9 existing/negative cases passed. The green focused
     Debug run passed 15 cases / 29038 assertions. Both full VS2026 Debug/RelWithDebInfo builds and
@@ -364,7 +392,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2A/M2B and M2C-2 accepted locally; M2C-3 runtime retirement implemented, manual/capture acceptance and M2D remain | M2C-3 Task 3 full CTest 163/163 per VS2026 configuration with synchronization validation; M2C-2 user acceptance and streamed captures remain historical | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2D-1 locally accepted; current suite consolidated to 153 cases | Pre-cleanup full CTest 165/165 per VS2026 configuration; post-cleanup affected 14 Debug cases pass with validation; sample logs return to baseline after 21/14 swaps | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -438,12 +466,19 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Immutable texture binding (Task 2 native ownership extraction verified):
   `docs/superpowers/plans/2026-11-04-owlengine-m2c3-texture-binding.md`;
   `engine/vulkan/src/VulkanTextureBinding.{h,cpp}` and `tests/vulkan/TextureBindingTests.cpp`.
-- Runtime replacement (Task 3 automatic verification complete; manual/capture acceptance pending):
+- Runtime replacement (Task 3 local acceptance recorded with explicit evidence limits):
   `docs/superpowers/plans/2026-11-04-owlengine-m2c3-runtime-replacement.md`;
   `VulkanTexturedQuadPipeline`, `VulkanTriangle`, `TextureSamplingTests.cpp` and `FrameTests.cpp`.
+- Allocator statistics (M2D-1, confirmed, implemented and locally accepted):
+  `docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md`;
+  `VulkanMemoryStats.h`, `VulkanAllocator`, `VulkanTriangle`, `VulkanSample.cpp`,
+  `tests/vulkan/MemoryStatsTests.cpp` and the existing renderer lifecycle tests.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
+- Test selection/coverage: `docs/building/windows.md#choose-tests-for-the-change`. Routine work
+  uses affected Debug tests; full/multi-configuration regression is reserved for milestone or
+  materially broader changes. Do not repeat tests for unchanged code or documentation-only edits.
 - Build/test definitions: `CMakePresets.json`, root/module `CMakeLists.txt`, and
   `tests/CMakeLists.txt`
 - Device contract and tests: `engine/vulkan/src/VulkanDevice.h`, `tests/vulkan/DeviceTests.cpp`,
@@ -507,15 +542,21 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - M2C-3 Task 3 replacement red/green, readback and full synchronization validation:
   `build/diagnostics/m2c3-replacement-20261104/`; full build logs:
   `build/m2c3-task3-*-build.log` (local, ignored).
+- M2C-3 local manual reports, capture replay/exports and shutdown counters:
+  `build/diagnostics/m2c3-acceptance-20261105/`, including `cpu-recheck/` (local, ignored).
+- M2D-1 red/green, full synchronization validation and sample memory/exit records:
+  `build/diagnostics/m2d1-statistics-20261105/`; full build logs:
+  `build/m2d1-{debug,relwithdebinfo}-build.log` (local, ignored).
+- Test consolidation: `build/diagnostics/test-pruning-20261105/` (discovery and focused validation);
+  `build/test-pruning-debug-build.log` (local, ignored).
 
 ## Next Work
 
-- Next acceptance: exercise R in both mip samples at LOD 0/6 and during automatic zoom, resize/
-  minimize/restore, and close after an accepted request. Confirm final retirement/upload counters
-  drain; capture replacement output with RenderDoc/MCP while keeping validation evidence separate.
-  Once M2C-3 is accepted, plan M2D resource/allocation statistics and the minimal debug surface.
+- Next: propose M2D-2 resource classification and pending-retirement byte accounting, using the
+  verified allocator totals as a baseline. Heap-budget negotiation and ImGui integration follow
+  in later slices; these require technical proposals before implementation.
   Preserve completed-use collection, bounded replacement ownership, per-slot upload reuse and
   single-mip/generated-mip sampled-pixel regressions.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  resource statistics and the debug panel remain M2D. RHI and additional
+  richer resource statistics and the debug panel remain M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.
