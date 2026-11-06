@@ -255,4 +255,10 @@ namespace owl::vulkan
         hostAccess_ = BufferHostAccess::None;
         mappedData_ = nullptr;
     }
+    VulkanResourceStats VulkanBuffer::ResourceStats() const noexcept
+    {
+        if (!IsValid())
+            return {};
+        return {.buffers = {1, size_, allocationSize_}};
+    }
 } // namespace owl::vulkan

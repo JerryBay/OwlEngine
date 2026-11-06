@@ -24,6 +24,7 @@ namespace owl::sandbox
                             const owl::vulkan::VulkanTriangleStats& stats)
         {
             const auto memory = renderer.QueryMemoryStats();
+            const auto resources = renderer.QueryResourceStats();
             std::ostringstream message;
             message << "VMA memory [" << reason << "]: ";
             if (memory)
@@ -35,6 +36,17 @@ namespace owl::sandbox
                         << "; texture replacements=" << stats.textureReplacements
                         << ", pending upload=" << (stats.textureReplacementPending ? "yes" : "no")
                         << ", pending retirements=" << stats.pendingTextureRetirements;
+                if (resources)
+                {
+                    message << "; buffers=" << resources->buffers.count
+                            << ", buffer requested bytes=" << resources->buffers.requestedBytes
+                            << ", buffer allocation bytes=" << resources->buffers.allocationBytes
+                            << "; images=" << resources->images.count
+                            << ", image requested bytes=" << resources->images.requestedBytes
+                            << ", image allocation bytes=" << resources->images.allocationBytes
+                            << ", retired image allocation bytes (included)="
+                            << resources->retiredImageAllocationBytes;
+                }
             }
             else
             {

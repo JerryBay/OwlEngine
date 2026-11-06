@@ -140,4 +140,22 @@ namespace owl::vulkan
         device_ = VK_NULL_HANDLE;
         desc_ = {};
     }
+    VulkanResourceStats VulkanImage::ResourceStats() const noexcept
+    {
+        if (!IsValid())
+            return {};
+        VmaAllocationInfo allocationInfo{};
+        vmaGetAllocationInfo(allocator_, allocation_, &allocationInfo);
+        // Only successfully created, format-limited RGBA8 images reach this calculation.
+        std::uint64_t requested = 0;
+        auto width = desc_.extent.width;
+        auto height = desc_.extent.height;
+        for (std::uint32_t mip = 0; mip < desc_.mipLevels; ++mip)
+        {
+            requested += static_cast<std::uint64_t>(width) * height * 4;
+            width = std::max(1U, width / 2);
+            height = std::max(1U, height / 2);
+        }
+        return {.images = {1, requested, allocationInfo.size}};
+    }
 } // namespace owl::vulkan

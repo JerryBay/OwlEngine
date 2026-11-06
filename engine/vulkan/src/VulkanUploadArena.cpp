@@ -223,4 +223,8 @@ namespace owl::vulkan
     {
         state_.MarkSubmitted(serial);
     }
+    VulkanResourceStats VulkanUploadArena::ResourceStats() const noexcept
+    {
+        return buffer_.ResourceStats();
+    }
 } // namespace owl::vulkan

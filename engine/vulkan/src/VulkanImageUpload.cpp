@@ -482,4 +482,13 @@ namespace owl::vulkan
         path_ = MipUploadPath::SingleLevel;
         state_ = detail::ImageUploadState::NotSubmitted;
     }
+    VulkanResourceStats VulkanImageUpload::ResourceStats() const noexcept
+    {
+        VulkanResourceStats result;
+        if (staging_)
+            result += staging_->ResourceStats();
+        if (destination_)
+            result += destination_->ResourceStats();
+        return result;
+    }
 } // namespace owl::vulkan

@@ -15,8 +15,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Priority: Learning depth > architecture quality > engineering quality > feature count.
 - Current phase: M2 GPU resources; M2C-3 local acceptance now combines automated verification,
   user-reported controls, drained shutdown statistics and GPU replacement LOD-0 capture. Evidence
-  limits remain explicit below. M2D-1 allocator snapshots and event-triggered logs are implemented,
-  with local automated and sample R/exit log acceptance complete.
+  limits remain explicit below. M2D-1 allocator snapshots have local automated and sample R/exit
+  log acceptance. M2D-2 Buffer/Image classification and retired-image byte accounting are
+  implemented and pass focused Debug validation; the additional log fields were not manually replayed.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -145,8 +146,20 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     report allocation count/bytes and reserved block count/bytes across VMA heaps. Queries do not
     submit, wait or collect. Clear/empty/failed owners report unavailable. Sandbox logs startup,
     observed upload/replacement/retirement changes and post-WaitIdle values; active resources still
-    exist at that exit snapshot. Native budgets, classification and ImGui remain later.
+    exist at that exit snapshot. Native budgets and ImGui remain later.
+  - M2D-2 `VulkanResourceStats` reports separate Buffer/Image counts, requested bytes and VMA
+    allocation bytes through an explicit optional Renderer query. Existing resource owners sum
+    staging, upload destinations, geometry, frame arenas, active and retired bindings once each.
+    Retired image allocation bytes are a subset of Image bytes, not an additional allocation.
+    Image requested bytes cover tightly packed RGBA8 pixels across all mips. The existing Sandbox
+    event logs include these fields; query calls do not submit, wait, publish or collect resources.
 - Verified:
+  - 2026-11-06, M2D-2: VS2026 Debug build and 11 existing memory-statistics, frame-lifecycle and
+    texture-replacement cases passed with actual synchronization/submit-time validation, no skips
+    and zero validation errors/warnings. Independent VMA totals match Buffer+Image counts/bytes;
+    checks cover non-square mip payloads, moves, pending uploads, full/partial retirement and
+    drained baselines. No new test cases, full-suite repeat, second configuration or manual sample
+    replay. Sandbox log formatting is source/build verified; new fields were not visually inspected.
   - 2026-11-05, test consolidation: removed five standalone GPU cases and combined command-line
     routing/trailing-argument cases; CTest discovery now reports 153 cases (previously 165).
     Frame-lifecycle combinations decreased from ten to six, retaining both presentation modes.
@@ -392,7 +405,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2D-1 locally accepted; current suite consolidated to 153 cases | Pre-cleanup full CTest 165/165 per VS2026 configuration; post-cleanup affected 14 Debug cases pass with validation; sample logs return to baseline after 21/14 swaps | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2D-2 classification implemented; current suite has 153 cases | M2D-2 affected 11 Debug cases pass with validation; earlier M2D-1 full CTest and manual log acceptance retained | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -473,6 +486,10 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md`;
   `VulkanMemoryStats.h`, `VulkanAllocator`, `VulkanTriangle`, `VulkanSample.cpp`,
   `tests/vulkan/MemoryStatsTests.cpp` and the existing renderer lifecycle tests.
+- Resource classification (M2D-2, implemented and focused Debug verified):
+  `docs/superpowers/specs/2026-11-06-owlengine-m2d-resource-statistics-design.md`;
+  `VulkanResourceStats.h`, resource-owner `ResourceStats()` methods, `VulkanTriangle`,
+  `VulkanSample.cpp` and existing memory/lifecycle/replacement tests.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -549,14 +566,15 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `build/m2d1-{debug,relwithdebinfo}-build.log` (local, ignored).
 - Test consolidation: `build/diagnostics/test-pruning-20261105/` (discovery and focused validation);
   `build/test-pruning-debug-build.log` (local, ignored).
+- M2D-2 focused synchronization validation: `build/diagnostics/m2d2-statistics-20261106/`;
+  Debug build: `build/m2d2-debug-build.log` (local, ignored).
 
 ## Next Work
 
-- Next: propose M2D-2 resource classification and pending-retirement byte accounting, using the
-  verified allocator totals as a baseline. Heap-budget negotiation and ImGui integration follow
-  in later slices; these require technical proposals before implementation.
+- Next: propose the next M2D slice using the verified allocator/resource snapshots. Heap-budget
+  negotiation and ImGui integration remain unimplemented and require technical proposals.
   Preserve completed-use collection, bounded replacement ownership, per-slot upload reuse and
   single-mip/generated-mip sampled-pixel regressions.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  richer resource statistics and the debug panel remain M2D. RHI and additional
+  heap budgets and the debug panel remain M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

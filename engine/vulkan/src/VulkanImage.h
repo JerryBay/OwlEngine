@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanMemory.h"
+#include <owl/vulkan/VulkanResourceStats.h>
 
 #include <cstdint>
 #include <optional>
@@ -45,6 +46,7 @@ namespace owl::vulkan
         [[nodiscard]] VkImage Get() const noexcept;
         [[nodiscard]] VkDevice Device() const noexcept;
         [[nodiscard]] const VulkanImageDesc& Desc() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
 
     private:
         void Reset() noexcept;

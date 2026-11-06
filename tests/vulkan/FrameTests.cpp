@@ -308,6 +308,22 @@ namespace
         REQUIRE(renderer);
         REQUIRE(renderer->IsValid());
         const auto memoryBaseline = renderer->QueryMemoryStats();
+        const auto checkResourceTotals = [&]
+        {
+            const auto memory = renderer->QueryMemoryStats();
+            const auto resources = renderer->QueryResourceStats();
+            REQUIRE(resources.has_value() == memory.has_value());
+            if (resources)
+            {
+                CHECK(resources->buffers.count + resources->images.count ==
+                      memory->allocationCount);
+                CHECK(resources->buffers.allocationBytes + resources->images.allocationBytes ==
+                      memory->allocationBytes);
+                CHECK(resources->retiredImageAllocationBytes <= resources->images.allocationBytes);
+            }
+            return resources;
+        };
+        const auto resourceBaseline = checkResourceTotals();
         if (mode == SampleMode::Clear)
         {
             CHECK_FALSE(memoryBaseline);
@@ -321,6 +337,16 @@ namespace
         }
         const auto checkDrainedMemory = [&]
         {
+            const auto resources = checkResourceTotals();
+            if (resources)
+            {
+                CHECK(resources->buffers.count == resourceBaseline->buffers.count);
+                CHECK(resources->buffers.requestedBytes ==
+                      resourceBaseline->buffers.requestedBytes);
+                CHECK(resources->images.count == resourceBaseline->images.count);
+                CHECK(resources->images.requestedBytes == resourceBaseline->images.requestedBytes);
+                CHECK(resources->retiredImageAllocationBytes == 0);
+            }
             const auto memory = renderer->QueryMemoryStats();
             REQUIRE(memory.has_value() == memoryBaseline.has_value());
             if (memory)
@@ -349,6 +375,10 @@ namespace
             CHECK(error.empty());
             const auto progressBeforeQuery = renderer->Stats();
             const auto pendingMemory = renderer->QueryMemoryStats();
+            const auto pendingResources = checkResourceTotals();
+            REQUIRE(pendingResources);
+            CHECK(pendingResources->buffers.count == resourceBaseline->buffers.count + 1);
+            CHECK(pendingResources->images.count >= resourceBaseline->images.count + 1);
             REQUIRE(pendingMemory);
             // Request retains both the new image and staging, even if the GPU already finished.
             CHECK(pendingMemory->allocationCount >= memoryBaseline->allocationCount + 2);
@@ -475,10 +505,23 @@ namespace
             checkInvalidDraw();
         const auto initial = renderer->Stats();
         const auto memoryBeforeMove = renderer->QueryMemoryStats();
+        const auto resourcesBeforeMove = checkResourceTotals();
         REQUIRE(initial.indexedDraws == (mode != SampleMode::Clear ? initial.submittedFrames : 0));
         owl::vulkan::VulkanTriangle moved{std::move(*renderer)};
         CHECK_FALSE(renderer->IsValid());
         CHECK_FALSE(renderer->QueryMemoryStats());
+        CHECK_FALSE(renderer->QueryResourceStats());
+        const auto movedResources = moved.QueryResourceStats();
+        REQUIRE(movedResources.has_value() == resourcesBeforeMove.has_value());
+        if (movedResources)
+        {
+            CHECK(movedResources->buffers.requestedBytes ==
+                  resourcesBeforeMove->buffers.requestedBytes);
+            CHECK(movedResources->images.requestedBytes ==
+                  resourcesBeforeMove->images.requestedBytes);
+            CHECK(movedResources->retiredImageAllocationBytes ==
+                  resourcesBeforeMove->retiredImageAllocationBytes);
+        }
         const auto movedMemory = moved.QueryMemoryStats();
         REQUIRE(movedMemory.has_value() == memoryBeforeMove.has_value());
         if (movedMemory)
@@ -497,6 +540,8 @@ namespace
         CHECK(moved.Stats().frameUploadedBytes == initial.frameUploadedBytes);
         *renderer = std::move(moved);
         CHECK_FALSE(moved.QueryMemoryStats());
+        CHECK_FALSE(moved.QueryResourceStats());
+        static_cast<void>(checkResourceTotals());
         const auto assignedMemory = renderer->QueryMemoryStats();
         REQUIRE(assignedMemory.has_value() == memoryBeforeMove.has_value());
         if (assignedMemory)

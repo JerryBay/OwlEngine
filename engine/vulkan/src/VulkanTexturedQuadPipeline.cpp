@@ -655,4 +655,24 @@ namespace owl::vulkan
         vkCmdBindIndexBuffer(command, geometry, IndexOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command, static_cast<std::uint32_t>(Indices.size()), 1, 0, 0, 0);
     }
+    VulkanResourceStats VulkanTexturedQuadPipeline::ResourceStats() const noexcept
+    {
+        auto result = geometry_.ResourceStats();
+        for (const auto& geometry : streamedGeometry_)
+            result += geometry.ResourceStats();
+        if (geometryUpload_)
+            result += geometryUpload_->ResourceStats();
+        if (imageUpload_)
+            result += imageUpload_->ResourceStats();
+        if (textureBinding_)
+            result += textureBinding_->ResourceStats();
+        retiredTextures_.ForEach(
+            [&](const VulkanTextureBinding& binding) noexcept
+            {
+                const auto retired = binding.ResourceStats();
+                result += retired;
+                result.retiredImageAllocationBytes += retired.images.allocationBytes;
+            });
+        return result;
+    }
 } // namespace owl::vulkan

@@ -68,6 +68,7 @@ namespace owl::vulkan
         [[nodiscard]] std::uint64_t TextureLastUseSerial() const noexcept;
         [[nodiscard]] std::size_t PendingTextureRetirements() const noexcept;
         [[nodiscard]] bool TextureReplacementPending() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
         [[nodiscard]] bool SetColorFormat(VkFormat format, std::string& error);
         [[nodiscard]] VkResult WaitForUpload(std::string& error);
         [[nodiscard]] VkResult DrainUploadForDestruction() noexcept;

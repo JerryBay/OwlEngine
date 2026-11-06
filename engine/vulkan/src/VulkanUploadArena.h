@@ -93,6 +93,7 @@ namespace owl::vulkan
         [[nodiscard]] VkDeviceSize UsedBytes() const noexcept;
         [[nodiscard]] std::uint64_t LastUseSerial() const noexcept;
         [[nodiscard]] VkMemoryPropertyFlags MemoryProperties() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
 
         // Completion must come from the same graphics-queue progress owner. After CanBegin,
         // discard old command recording and slices before Begin resets the writable batch.

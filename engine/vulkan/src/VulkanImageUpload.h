@@ -76,6 +76,7 @@ namespace owl::vulkan
             std::string& error,
             std::uint64_t timeoutNanoseconds = std::numeric_limits<std::uint64_t>::max());
         [[nodiscard]] bool IsPending() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
         // Non-throwing fence wait with queue-idle fallback. Unresolved errors retain ownership.
         [[nodiscard]] VkResult DrainForDestruction() noexcept;
         // Only call after an external queue/device idle proves submitted work completed.

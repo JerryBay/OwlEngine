@@ -68,6 +68,7 @@ namespace owl::vulkan
         [[nodiscard]] VkResult SubmitAndWait(std::string& error);
         [[nodiscard]] VkResult Wait(std::string& error);
         [[nodiscard]] bool IsPending() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
         // Destructor support: waits and updates ownership without allocating diagnostics.
         [[nodiscard]] VkResult DrainForDestruction() noexcept;
         void MarkCompleteAfterQueueIdleForDestruction() noexcept;

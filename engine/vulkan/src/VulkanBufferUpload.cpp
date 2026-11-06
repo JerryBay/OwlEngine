@@ -397,4 +397,13 @@ namespace owl::vulkan
         stagingMemoryProperties_ = 0;
         state_ = detail::BufferUploadState::NotSubmitted;
     }
+    VulkanResourceStats VulkanBufferUpload::ResourceStats() const noexcept
+    {
+        VulkanResourceStats result;
+        if (staging_)
+            result += staging_->ResourceStats();
+        if (destination_)
+            result += destination_->ResourceStats();
+        return result;
+    }
 } // namespace owl::vulkan

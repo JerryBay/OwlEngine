@@ -39,6 +39,10 @@ TEST_CASE("Empty memory owners report unavailable statistics", "[vulkan][memory-
     VulkanTriangle movedRenderer{std::move(renderer)};
     CHECK_FALSE(renderer.QueryMemoryStats());
     CHECK_FALSE(movedRenderer.QueryMemoryStats());
+    CHECK_FALSE(renderer.QueryResourceStats());
+    CHECK_FALSE(movedRenderer.QueryResourceStats());
+    CHECK(VulkanBuffer{}.ResourceStats().buffers.count == 0);
+    CHECK(VulkanImage{}.ResourceStats().images.count == 0);
 }
 
 TEST_CASE("Allocator snapshots track live buffer and image storage through moves and release",
@@ -70,11 +74,18 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
         CHECK(withBuffer.allocationCount == baseline.allocationCount + 1);
         CHECK(withBuffer.allocationBytes == baseline.allocationBytes + buffer->AllocationSize());
         CHECK(withBuffer.blockCount > 0);
+        const auto bufferUsage = buffer->ResourceStats();
+        CHECK(bufferUsage.buffers.count == 1);
+        CHECK(bufferUsage.buffers.requestedBytes == 67);
+        CHECK(bufferUsage.buffers.allocationBytes == buffer->AllocationSize());
+        VulkanBuffer movedBuffer{std::move(*buffer)};
+        CHECK(buffer->ResourceStats().buffers.count == 0);
+        CHECK(movedBuffer.ResourceStats().buffers.requestedBytes == 67);
 
         const VulkanImageDesc imageDesc{
-            .extent = {64, 64},
+            .extent = {7, 3},
             .format = VK_FORMAT_R8G8B8A8_UNORM,
-            .mipLevels = 7,
+            .mipLevels = 3,
             .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         };
         auto image = VulkanImage::Create(*context->allocator, imageDesc, error);
@@ -83,6 +94,18 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
         const auto withImage = CheckSnapshot(*context->allocator);
         CHECK(withImage.allocationCount == withBuffer.allocationCount + 1);
         CHECK(withImage.allocationBytes > withBuffer.allocationBytes);
+        const auto imageUsage = image->ResourceStats();
+        CHECK(imageUsage.images.count == 1);
+        // 7x3 + 3x1 + 1x1 RGBA8 texels, independent of optimal native image padding.
+        CHECK(imageUsage.images.requestedBytes == 100);
+        CHECK(imageUsage.images.allocationBytes ==
+              withImage.allocationBytes - withBuffer.allocationBytes);
+        VulkanImage movedImage{std::move(*image)};
+        CHECK(image->ResourceStats().images.count == 0);
+        *image = std::move(movedImage);
+        CHECK(movedImage.ResourceStats().images.count == 0);
+        CHECK(image->ResourceStats().images.requestedBytes == 100);
+        CHECK(image->ResourceStats().images.allocationBytes == imageUsage.images.allocationBytes);
         for (int observation = 0; observation < 3; ++observation)
         {
             const auto stable = CheckSnapshot(*context->allocator);

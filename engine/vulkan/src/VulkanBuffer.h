@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanMemory.h"
+#include <owl/vulkan/VulkanResourceStats.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,7 @@ namespace owl::vulkan
         [[nodiscard]] VkDeviceSize Size() const noexcept;
         // The allocation slice size, not the containing VMA memory block size.
         [[nodiscard]] VkDeviceSize AllocationSize() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
         [[nodiscard]] VkMemoryPropertyFlags MemoryProperties() const noexcept;
         [[nodiscard]] bool IsPersistentlyMapped() const noexcept;
         [[nodiscard]] bool Write(VkDeviceSize offset, std::span<const std::byte> data,

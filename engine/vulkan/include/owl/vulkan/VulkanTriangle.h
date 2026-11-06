@@ -1,6 +1,7 @@
 #pragma once
 
 #include <owl/vulkan/VulkanMemoryStats.h>
+#include <owl/vulkan/VulkanResourceStats.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -120,6 +121,8 @@ namespace owl::vulkan
         // Explicit allocator query, separate from cheap frame counters. No GPU wait or collection.
         // Unavailable for empty/failed owners and Clear, which has no VMA allocator.
         [[nodiscard]] std::optional<VulkanMemoryStats> QueryMemoryStats() const noexcept;
+        // Read-only ownership snapshot on the same window thread, with the same availability.
+        [[nodiscard]] std::optional<VulkanResourceStats> QueryResourceStats() const noexcept;
 
     private:
         struct Impl;

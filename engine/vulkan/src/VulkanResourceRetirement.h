@@ -69,6 +69,17 @@ namespace owl::vulkan::detail
             return pendingCount_;
         }
 
+        // Read-only observation on the owner thread. Visitor must not mutate this queue or
+        // retain references beyond the call; no completion is inferred and nothing is collected.
+        template <typename Visitor> void ForEach(const Visitor& visitor) const
+        {
+            for (const auto& entry : entries_)
+            {
+                if (entry.resource)
+                    visitor(std::as_const(*entry.resource));
+            }
+        }
+
     private:
         struct Entry
         {

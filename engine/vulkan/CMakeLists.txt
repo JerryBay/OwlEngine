@@ -5,6 +5,7 @@ add_library(OwlVulkan STATIC)
 
 target_sources(OwlVulkan PRIVATE
     include/owl/vulkan/VulkanMemoryStats.h
+    include/owl/vulkan/VulkanResourceStats.h
     include/owl/vulkan/VulkanTriangle.h
     src/VulkanAllocator.cpp
     src/VulkanAllocator.h

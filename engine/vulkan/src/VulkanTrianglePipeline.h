@@ -37,6 +37,7 @@ namespace owl::vulkan
         void MarkUploadDeviceLostForDestruction() noexcept;
         // Requires a successful SetColorFormat and an active matching Dynamic Rendering scope.
         void RecordDraw(VkCommandBuffer command, VkExtent2D extent) const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;

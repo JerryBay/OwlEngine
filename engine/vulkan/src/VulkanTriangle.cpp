@@ -761,6 +761,20 @@ namespace owl::vulkan
         return impl_->allocator.QueryMemoryStats();
     }
 
+    std::optional<VulkanResourceStats> VulkanTriangle::QueryResourceStats() const noexcept
+    {
+        if (!IsValid() || !impl_->allocator.IsValid())
+            return std::nullopt;
+        auto result = impl_->triangle.ResourceStats();
+        result += impl_->texture.ResourceStats();
+        for (const auto& slot : impl_->frames.slots)
+        {
+            if (slot.uploadArena)
+                result += slot.uploadArena->ResourceStats();
+        }
+        return result;
+    }
+
     VulkanTriangleStats VulkanTriangle::Stats() const noexcept
     {
         if (!impl_)

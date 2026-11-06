@@ -56,8 +56,12 @@ M2D-1 now exposes explicit VMA allocation/block statistics and event-triggered S
 The M2D-1 checkpoint passed 165/165 tests in both VS2026 configurations with synchronization
 validation and zero errors/warnings. A later test cleanup reduced the current suite to 153 cases;
 the affected 14 Debug cases passed with validation. User-confirmed GPU/CPU mip runs returned to their startup live-allocation
-baseline after 21/14 replacements, with normal exit and zero validation errors/warnings. See the
+baseline after 21/14 replacements, with normal exit and zero validation errors/warnings.
+M2D-2 adds Buffer/Image counts, requested/allocation bytes and a retired-image subset to those logs.
+Its 11 affected existing Debug cases passed with synchronization validation and zero errors/warnings;
+no full-suite or manual sample replay was repeated. See the
 [memory statistics design](docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md),
+[resource classification design](docs/superpowers/specs/2026-11-06-owlengine-m2d-resource-statistics-design.md),
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
@@ -94,6 +98,9 @@ ctest --preset windows-vs2022-debug
 The Vulkan samples print `VMA memory` at startup and after WaitIdle on exit. In either mip sample,
 press R to observe allocation changes during upload, replacement and retirement. Live allocation
 count/bytes should return to the startup baseline after drain; reserved block bytes can stay cached.
+Buffer/Image fields distinguish logical requested bytes from actual VMA allocation bytes. Image
+requested bytes include all RGBA8 mips. Retired image allocation bytes are already included in the
+Image total and should return to zero after collection.
 These are this allocator's totals, not whole-process VRAM usage. Clear reports unavailable because
 it has no VMA allocator. The renderer's active resources still exist at the exit snapshot.
 

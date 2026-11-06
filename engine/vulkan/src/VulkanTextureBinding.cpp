@@ -108,4 +108,8 @@ namespace owl::vulkan
     {
         return descriptorSet_;
     }
+    VulkanResourceStats VulkanTextureBinding::ResourceStats() const noexcept
+    {
+        return image_.ResourceStats();
+    }
 } // namespace owl::vulkan

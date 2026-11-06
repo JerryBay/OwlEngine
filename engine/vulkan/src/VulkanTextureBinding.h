@@ -28,6 +28,7 @@ namespace owl::vulkan
         Create(const VulkanDevice& device, VkDescriptorSetLayout layout, VulkanImage& image,
                std::string& error);
         [[nodiscard]] VkDescriptorSet DescriptorSet() const noexcept;
+        [[nodiscard]] VulkanResourceStats ResourceStats() const noexcept;
 
     private:
         VulkanTextureBinding() noexcept = default;

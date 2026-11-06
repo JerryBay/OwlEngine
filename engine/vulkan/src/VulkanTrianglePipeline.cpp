@@ -306,4 +306,11 @@ namespace owl::vulkan
         vkCmdBindIndexBuffer(command, buffer, IndexOffset, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command, static_cast<std::uint32_t>(Indices.size()), 1, 0, 0, 0);
     }
+    VulkanResourceStats VulkanTrianglePipeline::ResourceStats() const noexcept
+    {
+        auto result = geometry_.ResourceStats();
+        if (upload_)
+            result += upload_->ResourceStats();
+        return result;
+    }
 } // namespace owl::vulkan

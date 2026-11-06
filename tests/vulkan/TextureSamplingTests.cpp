@@ -524,6 +524,21 @@ namespace
                 {assets / "texture_mips.vert.spv", assets / "texture_mips.frag.spv"}, error, mode));
             REQUIRE(pipeline.SetColorFormat(TargetFormat, error));
             const auto initialAllocations = allocations();
+            const auto checkResourceTotals = [&]
+            {
+                const auto usage = pipeline.ResourceStats();
+                const auto native = allocations();
+                CHECK(usage.buffers.count + usage.images.count ==
+                      native.allocationCount - baseline.allocationCount);
+                CHECK(usage.buffers.allocationBytes + usage.images.allocationBytes ==
+                      native.allocationBytes - baseline.allocationBytes);
+                CHECK(usage.retiredImageAllocationBytes <= usage.images.allocationBytes);
+                return usage;
+            };
+            const auto initialResources = checkResourceTotals();
+            REQUIRE(initialResources.images.count == 1);
+            CHECK(initialResources.images.requestedBytes == 21844); // 64x64 through 1x1 RGBA8.
+            CHECK(initialResources.retiredImageAllocationBytes == 0);
             std::uint64_t serial = 0;
             auto original =
                 DrawAndReadback(*context, pipeline, {.lod = 0.0F}, error, std::nullopt, ++serial);
@@ -551,6 +566,10 @@ namespace
                     TextureReplacementResult::Accepted);
             CHECK(error.empty());
             REQUIRE(pipeline.TextureReplacementPending());
+            const auto uploading = checkResourceTotals();
+            CHECK(uploading.images.count == 2);
+            CHECK(uploading.buffers.count == initialResources.buffers.count + 1);
+            CHECK(uploading.images.requestedBytes == 2 * initialResources.images.requestedBytes);
             CHECK(pipeline.RequestTextureReplacement(*context->device, *context->allocator, pixels,
                                                      error) == TextureReplacementResult::Busy);
             CHECK(error.empty());
@@ -565,11 +584,16 @@ namespace
             CHECK_FALSE(pipeline.TextureReplacementPending());
             REQUIRE(pipeline.TextureReplacements() == 1);
             REQUIRE(pipeline.PendingTextureRetirements() == 1);
+            const auto retired = checkResourceTotals();
+            CHECK(retired.retiredImageAllocationBytes == initialResources.images.allocationBytes);
             CHECK(pipeline.TextureLastUseSerial() == 0);
             // Last use is the second draw, after the upload submit, not the first draw.
             CHECK(pipeline.CollectRetiredTextures(1) == 0);
+            CHECK(checkResourceTotals().retiredImageAllocationBytes ==
+                  initialResources.images.allocationBytes);
             CHECK(allocations().allocationCount == initialAllocations.allocationCount + 1);
             CHECK(pipeline.CollectRetiredTextures(2) == 1);
+            CHECK(checkResourceTotals().retiredImageAllocationBytes == 0);
             for (const float lod : {0.0F, 6.0F})
             {
                 auto replaced = DrawAndReadback(*context, pipeline, {.lod = lod}, error,
@@ -594,6 +618,8 @@ namespace
                 REQUIRE(pipeline.ProcessTextureReplacement(*context->device, 0, error) ==
                         VK_SUCCESS);
                 CHECK(pipeline.PendingTextureRetirements() == index + 1);
+                CHECK(checkResourceTotals().retiredImageAllocationBytes ==
+                      (index + 1) * initialResources.images.allocationBytes);
             }
             const auto full = allocations();
             CHECK(pipeline.RequestTextureReplacement(*context->device, *context->allocator, pixels,
@@ -602,7 +628,10 @@ namespace
             CHECK(allocations().allocationCount == full.allocationCount);
             CHECK(pipeline.CollectRetiredTextures(lastUses[1]) == 2);
             CHECK(pipeline.PendingTextureRetirements() == 2);
+            CHECK(checkResourceTotals().retiredImageAllocationBytes ==
+                  2 * initialResources.images.allocationBytes);
             CHECK(pipeline.CollectRetiredTextures(serial) == 2);
+            CHECK(checkResourceTotals().retiredImageAllocationBytes == 0);
             auto final =
                 DrawAndReadback(*context, pipeline, {.lod = 6.0F}, error, std::nullopt, ++serial);
             REQUIRE(final);
