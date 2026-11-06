@@ -25,6 +25,7 @@ namespace owl::sandbox
         {
             const auto memory = renderer.QueryMemoryStats();
             const auto resources = renderer.QueryResourceStats();
+            const auto budgets = renderer.QueryMemoryBudgetStats();
             std::ostringstream message;
             message << "VMA memory [" << reason << "]: ";
             if (memory)
@@ -46,6 +47,27 @@ namespace owl::sandbox
                             << ", image allocation bytes=" << resources->images.allocationBytes
                             << ", retired image allocation bytes (included)="
                             << resources->retiredImageAllocationBytes;
+                }
+                if (budgets)
+                {
+                    message << "; memory heaps=" << budgets->heapCount
+                            << ", budget source=VK_EXT_memory_budget via VMA (estimates)";
+                    for (std::uint32_t index = 0; index < budgets->heapCount; ++index)
+                    {
+                        const auto& heap = budgets->heaps[index];
+                        message << "; heap[" << heap.heapIndex
+                                << "] device local=" << (heap.deviceLocal ? "yes" : "no")
+                                << ", heap flags=" << heap.heapFlags << ", size=" << heap.heapSize
+                                << ", usage=" << heap.usage << ", budget=" << heap.budget
+                                << ", allocations=" << heap.allocationCount
+                                << ", allocation bytes=" << heap.allocationBytes
+                                << ", blocks=" << heap.blockCount
+                                << ", reserved block bytes=" << heap.blockBytes;
+                    }
+                }
+                else
+                {
+                    message << "; memory budget=unavailable";
                 }
             }
             else

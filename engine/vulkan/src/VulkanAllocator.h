@@ -2,6 +2,7 @@
 
 #include "VulkanMemory.h"
 
+#include <owl/vulkan/VulkanMemoryBudget.h>
 #include <owl/vulkan/VulkanMemoryStats.h>
 
 #include <optional>
@@ -30,11 +31,17 @@ namespace owl::vulkan
         [[nodiscard]] VkDevice Device() const noexcept;
         // Host observation only; does not submit, wait or release allocations.
         [[nodiscard]] std::optional<VulkanMemoryStats> QueryMemoryStats() const noexcept;
+        // VMA estimates using cached driver budget data. Unavailable without the extension.
+        [[nodiscard]] std::optional<VulkanMemoryBudgetStats>
+        QueryMemoryBudgetStats() const noexcept;
+        // Host frame notification refreshes VMA's budget cache. No GPU work or collection.
+        void SetCurrentFrameIndex(std::uint32_t frameIndex) noexcept;
 
     private:
         void Reset() noexcept;
 
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
+        bool memoryBudgetEnabled_ = false;
     };
 } // namespace owl::vulkan

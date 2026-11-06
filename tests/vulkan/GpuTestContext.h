@@ -33,6 +33,7 @@ namespace owl::tests
         ~GpuContext();
     };
 
-    [[nodiscard]] std::optional<GpuContext> CreateGpuContext(std::string& error);
+    [[nodiscard]] std::optional<GpuContext> CreateGpuContext(std::string& error,
+                                                             bool enableMemoryBudget = true);
     [[nodiscard]] bool IsGpuTestEnabled();
 } // namespace owl::tests

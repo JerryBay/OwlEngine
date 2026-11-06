@@ -59,9 +59,13 @@ the affected 14 Debug cases passed with validation. User-confirmed GPU/CPU mip r
 baseline after 21/14 replacements, with normal exit and zero validation errors/warnings.
 M2D-2 adds Buffer/Image counts, requested/allocation bytes and a retired-image subset to those logs.
 Its 11 affected existing Debug cases passed with synchronization validation and zero errors/warnings;
-no full-suite or manual sample replay was repeated. See the
+no full-suite or manual sample replay was repeated.
+M2D-3 adds optional device memory budgets and per-heap statistics. Its 15 affected existing Debug
+cases and a bounded Sandbox log run passed with synchronization validation and zero errors/warnings.
+See the
 [memory statistics design](docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md),
 [resource classification design](docs/superpowers/specs/2026-11-06-owlengine-m2d-resource-statistics-design.md),
+[heap budget design](docs/superpowers/specs/2026-11-06-owlengine-m2d-memory-budget-design.md),
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
@@ -101,8 +105,12 @@ count/bytes should return to the startup baseline after drain; reserved block by
 Buffer/Image fields distinguish logical requested bytes from actual VMA allocation bytes. Image
 requested bytes include all RGBA8 mips. Retired image allocation bytes are already included in the
 Image total and should return to zero after collection.
-These are this allocator's totals, not whole-process VRAM usage. Clear reports unavailable because
-it has no VMA allocator. The renderer's active resources still exist at the exit snapshot.
+These allocation/resource fields are this allocator's totals, not whole-process VRAM usage.
+When `VK_EXT_memory_budget` is available, each heap also reports capacity, heap properties and
+estimated process usage/budget through VMA. Budget is a changing guideline, not remaining free
+memory. Missing budget support is reported as unavailable; ordinary allocation statistics remain.
+Clear has no VMA allocator, so all these queries are unavailable. The renderer's active resources
+still exist at the exit snapshot.
 
 For daily changes, build Debug and select the affected tests. Full dual-configuration regression
 belongs to milestone acceptance or configuration-sensitive work. See

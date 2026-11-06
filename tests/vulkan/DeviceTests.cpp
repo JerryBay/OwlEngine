@@ -135,6 +135,7 @@ TEST_CASE("Empty Vulkan devices have no queues after moves", "[vulkan][device]")
         CHECK(device->GraphicsQueue() == VK_NULL_HANDLE);
         CHECK(device->PresentQueue() == VK_NULL_HANDLE);
         CHECK_FALSE(device->HasPresentFences());
+        CHECK_FALSE(device->HasMemoryBudget());
         CHECK_FALSE(device->QueueFamilies().graphicsFamily.has_value());
         CHECK_FALSE(device->QueueFamilies().presentFamily.has_value());
     }

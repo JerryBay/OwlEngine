@@ -3,6 +3,7 @@
 #include "VulkanImage.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <owl/vulkan/VulkanTriangle.h>
 
 #include <utility>
@@ -23,6 +24,42 @@ namespace
         CHECK(snapshot->blockCount == native.total.statistics.blockCount);
         CHECK(snapshot->blockBytes == native.total.statistics.blockBytes);
         CHECK(snapshot->blockBytes >= snapshot->allocationBytes);
+        const auto budgets = allocator.QueryMemoryBudgetStats();
+        if (budgets)
+        {
+            VmaAllocatorInfo allocatorInfo{};
+            vmaGetAllocatorInfo(allocator.Get(), &allocatorInfo);
+            VkPhysicalDeviceMemoryProperties properties{};
+            vkGetPhysicalDeviceMemoryProperties(allocatorInfo.physicalDevice, &properties);
+            REQUIRE(budgets->heapCount == properties.memoryHeapCount);
+            REQUIRE(budgets->heapCount <= budgets->heaps.size());
+            VulkanMemoryStats sum;
+            for (std::uint32_t index = 0; index < budgets->heapCount; ++index)
+            {
+                const auto& heap = budgets->heaps[index];
+                const auto& expected = native.memoryHeap[index].statistics;
+                CHECK(heap.heapIndex == index);
+                CHECK(heap.heapFlags == properties.memoryHeaps[index].flags);
+                CHECK(heap.deviceLocal == ((properties.memoryHeaps[index].flags &
+                                            VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0));
+                CHECK(heap.heapSize == properties.memoryHeaps[index].size);
+                CHECK(heap.budget > 0);
+                CHECK(heap.budget <= heap.heapSize);
+                // Usage is dynamic and may exceed budget; it is not an allocator counter.
+                CHECK(heap.allocationCount == expected.allocationCount);
+                CHECK(heap.allocationBytes == expected.allocationBytes);
+                CHECK(heap.blockCount == expected.blockCount);
+                CHECK(heap.blockBytes == expected.blockBytes);
+                sum.allocationCount += heap.allocationCount;
+                sum.allocationBytes += heap.allocationBytes;
+                sum.blockCount += heap.blockCount;
+                sum.blockBytes += heap.blockBytes;
+            }
+            CHECK(sum.allocationCount == snapshot->allocationCount);
+            CHECK(sum.allocationBytes == snapshot->allocationBytes);
+            CHECK(sum.blockCount == snapshot->blockCount);
+            CHECK(sum.blockBytes == snapshot->blockBytes);
+        }
         return *snapshot;
     }
 } // namespace
@@ -30,10 +67,13 @@ namespace
 TEST_CASE("Empty memory owners report unavailable statistics", "[vulkan][memory-stats]")
 {
     VulkanAllocator allocator;
+    allocator.SetCurrentFrameIndex(0);
+    CHECK_FALSE(allocator.QueryMemoryBudgetStats());
     CHECK_FALSE(allocator.QueryMemoryStats());
     VulkanAllocator moved{std::move(allocator)};
     CHECK_FALSE(allocator.QueryMemoryStats());
     CHECK_FALSE(moved.QueryMemoryStats());
+    CHECK_FALSE(moved.QueryMemoryBudgetStats());
     VulkanTriangle renderer;
     CHECK_FALSE(renderer.QueryMemoryStats());
     VulkanTriangle movedRenderer{std::move(renderer)};
@@ -41,6 +81,8 @@ TEST_CASE("Empty memory owners report unavailable statistics", "[vulkan][memory-
     CHECK_FALSE(movedRenderer.QueryMemoryStats());
     CHECK_FALSE(renderer.QueryResourceStats());
     CHECK_FALSE(movedRenderer.QueryResourceStats());
+    CHECK_FALSE(renderer.QueryMemoryBudgetStats());
+    CHECK_FALSE(movedRenderer.QueryMemoryBudgetStats());
     CHECK(VulkanBuffer{}.ResourceStats().buffers.count == 0);
     CHECK(VulkanImage{}.ResourceStats().images.count == 0);
 }
@@ -51,9 +93,15 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
     if (!owl::tests::IsGpuTestEnabled())
         SKIP("Set OWL_RUN_VULKAN_BOOTSTRAP_TEST=1 to run allocator statistics checks");
     std::string error;
-    auto context = owl::tests::CreateGpuContext(error);
+    const bool enableMemoryBudget = GENERATE(true, false);
+    CAPTURE(enableMemoryBudget);
+    auto context = owl::tests::CreateGpuContext(error, enableMemoryBudget);
     INFO(error);
     REQUIRE(context);
+    const bool budgetEnabled = context->device->HasMemoryBudget();
+    if (!enableMemoryBudget)
+        CHECK_FALSE(budgetEnabled);
+    CHECK(context->allocator->QueryMemoryBudgetStats().has_value() == budgetEnabled);
     const auto baseline = CheckSnapshot(*context->allocator);
     CHECK(baseline.allocationCount == 0);
     CHECK(baseline.allocationBytes == 0);
@@ -108,6 +156,7 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
         CHECK(image->ResourceStats().images.allocationBytes == imageUsage.images.allocationBytes);
         for (int observation = 0; observation < 3; ++observation)
         {
+            context->allocator->SetCurrentFrameIndex(static_cast<std::uint32_t>(observation));
             const auto stable = CheckSnapshot(*context->allocator);
             CHECK(stable.allocationCount == withImage.allocationCount);
             CHECK(stable.allocationBytes == withImage.allocationBytes);
@@ -117,6 +166,8 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
 
         movedAllocator = VulkanAllocator{std::move(*context->allocator)};
         CHECK_FALSE(context->allocator->QueryMemoryStats());
+        CHECK_FALSE(context->allocator->QueryMemoryBudgetStats());
+        CHECK(movedAllocator.QueryMemoryBudgetStats().has_value() == budgetEnabled);
         const auto moved = CheckSnapshot(movedAllocator);
         CHECK(moved.allocationCount == withImage.allocationCount);
         CHECK(moved.allocationBytes == withImage.allocationBytes);
@@ -124,6 +175,8 @@ TEST_CASE("Allocator snapshots track live buffer and image storage through moves
         CHECK(moved.blockBytes == withImage.blockBytes);
         *context->allocator = std::move(movedAllocator);
         CHECK_FALSE(movedAllocator.QueryMemoryStats());
+        CHECK_FALSE(movedAllocator.QueryMemoryBudgetStats());
+        CHECK(context->allocator->QueryMemoryBudgetStats().has_value() == budgetEnabled);
         CHECK(CheckSnapshot(*context->allocator).allocationBytes == withImage.allocationBytes);
 
         image.reset();

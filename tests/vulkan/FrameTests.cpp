@@ -308,11 +308,32 @@ namespace
         REQUIRE(renderer);
         REQUIRE(renderer->IsValid());
         const auto memoryBaseline = renderer->QueryMemoryStats();
+        const auto budgetBaseline = renderer->QueryMemoryBudgetStats();
         const auto checkResourceTotals = [&]
         {
             const auto memory = renderer->QueryMemoryStats();
             const auto resources = renderer->QueryResourceStats();
             REQUIRE(resources.has_value() == memory.has_value());
+            const auto budgets = renderer->QueryMemoryBudgetStats();
+            REQUIRE(budgets.has_value() == budgetBaseline.has_value());
+            if (budgets)
+            {
+                REQUIRE(memory);
+                REQUIRE(budgets->heapCount == budgetBaseline->heapCount);
+                REQUIRE(budgets->heapCount <= budgets->heaps.size());
+                std::uint64_t allocations = 0;
+                std::uint64_t bytes = 0;
+                for (std::uint32_t index = 0; index < budgets->heapCount; ++index)
+                {
+                    const auto& heap = budgets->heaps[index];
+                    CHECK(heap.heapSize == budgetBaseline->heaps[index].heapSize);
+                    CHECK(heap.heapFlags == budgetBaseline->heaps[index].heapFlags);
+                    allocations += heap.allocationCount;
+                    bytes += heap.allocationBytes;
+                }
+                CHECK(allocations == memory->allocationCount);
+                CHECK(bytes == memory->allocationBytes);
+            }
             if (resources)
             {
                 CHECK(resources->buffers.count + resources->images.count ==
@@ -327,6 +348,7 @@ namespace
         if (mode == SampleMode::Clear)
         {
             CHECK_FALSE(memoryBaseline);
+            CHECK_FALSE(budgetBaseline);
         }
         else
         {
@@ -511,6 +533,8 @@ namespace
         CHECK_FALSE(renderer->IsValid());
         CHECK_FALSE(renderer->QueryMemoryStats());
         CHECK_FALSE(renderer->QueryResourceStats());
+        CHECK_FALSE(renderer->QueryMemoryBudgetStats());
+        CHECK(moved.QueryMemoryBudgetStats().has_value() == budgetBaseline.has_value());
         const auto movedResources = moved.QueryResourceStats();
         REQUIRE(movedResources.has_value() == resourcesBeforeMove.has_value());
         if (movedResources)
@@ -541,6 +565,7 @@ namespace
         *renderer = std::move(moved);
         CHECK_FALSE(moved.QueryMemoryStats());
         CHECK_FALSE(moved.QueryResourceStats());
+        CHECK_FALSE(moved.QueryMemoryBudgetStats());
         static_cast<void>(checkResourceTotals());
         const auto assignedMemory = renderer->QueryMemoryStats();
         REQUIRE(assignedMemory.has_value() == memoryBeforeMove.has_value());

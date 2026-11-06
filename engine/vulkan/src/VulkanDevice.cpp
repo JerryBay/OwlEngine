@@ -113,7 +113,8 @@ namespace owl::vulkan
           presentQueue_(std::exchange(other.presentQueue_, VK_NULL_HANDLE)),
           queueFamilies_(std::exchange(other.queueFamilies_, detail::QueueFamilySelection{})),
           swapchainMaintenance_(
-              std::exchange(other.swapchainMaintenance_, detail::SwapchainMaintenance::None))
+              std::exchange(other.swapchainMaintenance_, detail::SwapchainMaintenance::None)),
+          memoryBudgetEnabled_(std::exchange(other.memoryBudgetEnabled_, false))
     {
     }
 
@@ -129,13 +130,15 @@ namespace owl::vulkan
             queueFamilies_ = std::exchange(other.queueFamilies_, detail::QueueFamilySelection{});
             swapchainMaintenance_ =
                 std::exchange(other.swapchainMaintenance_, detail::SwapchainMaintenance::None);
+            memoryBudgetEnabled_ = std::exchange(other.memoryBudgetEnabled_, false);
         }
         return *this;
     }
 
     std::optional<VulkanDevice>
     VulkanDevice::Create(const VulkanDeviceSelection& selection, std::string& error,
-                         const detail::PresentationSupportCapabilities& presentationSupport)
+                         const detail::PresentationSupportCapabilities& presentationSupport,
+                         const bool enableMemoryBudget)
     {
         if (selection.Get() == VK_NULL_HANDLE)
         {
@@ -149,6 +152,15 @@ namespace owl::vulkan
         {
             return std::nullopt;
         }
+
+        std::vector<VkExtensionProperties> availableExtensions;
+        if (!EnumerateDeviceExtensions(selection.Get(), availableExtensions, error))
+        {
+            return std::nullopt;
+        }
+        const bool memoryBudgetEnabled =
+            enableMemoryBudget &&
+            HasExtension(availableExtensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 
         const float queuePriority = 1.0F;
         std::array<VkDeviceQueueCreateInfo, 2> queueCreateInfos{};
@@ -169,12 +181,6 @@ namespace owl::vulkan
         if (presentationSupport.khrSurfaceMaintenance1 ||
             presentationSupport.extSurfaceMaintenance1)
         {
-            std::vector<VkExtensionProperties> availableExtensions;
-            if (!EnumerateDeviceExtensions(selection.Get(), availableExtensions, error))
-            {
-                return std::nullopt;
-            }
-
             detail::SwapchainMaintenanceAvailability maintenanceAvailability{
                 .khrExtension = HasExtension(availableExtensions,
                                              VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME),
@@ -208,6 +214,10 @@ namespace owl::vulkan
             .dynamicRendering = VK_TRUE,
         };
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        if (memoryBudgetEnabled)
+        {
+            extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        }
         if (maintenance == detail::SwapchainMaintenance::Khr)
         {
             extensions.push_back(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
@@ -239,6 +249,7 @@ namespace owl::vulkan
         device.device_ = handle;
         device.physicalDevice_ = selection.Get();
         device.swapchainMaintenance_ = maintenance;
+        device.memoryBudgetEnabled_ = memoryBudgetEnabled;
         device.queueFamilies_ = selection.QueueFamilies();
         vkGetDeviceQueue(device.device_, *device.queueFamilies_.graphicsFamily, 0,
                          &device.graphicsQueue_);
@@ -253,6 +264,7 @@ namespace owl::vulkan
                 ", presentQueueFamily=" + std::to_string(*device.queueFamilies_.presentFamily) +
                 ", extension=VK_KHR_swapchain, presentFences=" +
                 (device.HasPresentFences() ? "true" : "false") +
+                ", memoryBudget=" + (device.HasMemoryBudget() ? "true" : "false") +
                 ", dynamicRendering=true, synchronization2=true)");
         error.clear();
         return device;
@@ -288,6 +300,11 @@ namespace owl::vulkan
         return swapchainMaintenance_ != detail::SwapchainMaintenance::None;
     }
 
+    bool VulkanDevice::HasMemoryBudget() const noexcept
+    {
+        return memoryBudgetEnabled_;
+    }
+
     const detail::QueueFamilySelection& VulkanDevice::QueueFamilies() const noexcept
     {
         return queueFamilies_;
@@ -305,5 +322,6 @@ namespace owl::vulkan
         presentQueue_ = VK_NULL_HANDLE;
         queueFamilies_ = {};
         swapchainMaintenance_ = detail::SwapchainMaintenance::None;
+        memoryBudgetEnabled_ = false;
     }
 } // namespace owl::vulkan

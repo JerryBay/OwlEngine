@@ -14,7 +14,8 @@ namespace owl::vulkan
 
     VulkanAllocator::VulkanAllocator(VulkanAllocator&& other) noexcept
         : allocator_(std::exchange(other.allocator_, VK_NULL_HANDLE)),
-          device_(std::exchange(other.device_, VK_NULL_HANDLE))
+          device_(std::exchange(other.device_, VK_NULL_HANDLE)),
+          memoryBudgetEnabled_(std::exchange(other.memoryBudgetEnabled_, false))
     {
     }
 
@@ -25,6 +26,7 @@ namespace owl::vulkan
             Reset();
             allocator_ = std::exchange(other.allocator_, VK_NULL_HANDLE);
             device_ = std::exchange(other.device_, VK_NULL_HANDLE);
+            memoryBudgetEnabled_ = std::exchange(other.memoryBudgetEnabled_, false);
         }
         return *this;
     }
@@ -42,6 +44,9 @@ namespace owl::vulkan
             .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
         };
         const VmaAllocatorCreateInfo info{
+            .flags = device.HasMemoryBudget()
+                         ? VmaAllocatorCreateFlags{VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT}
+                         : VmaAllocatorCreateFlags{0},
             .physicalDevice = device.PhysicalDevice(),
             .device = device.Get(),
             .pVulkanFunctions = &functions,
@@ -57,6 +62,7 @@ namespace owl::vulkan
             return std::nullopt;
         }
         result.device_ = device.Get();
+        result.memoryBudgetEnabled_ = device.HasMemoryBudget();
         error.clear();
         return result;
     }
@@ -87,11 +93,50 @@ namespace owl::vulkan
         return result;
     }
 
+    std::optional<VulkanMemoryBudgetStats> VulkanAllocator::QueryMemoryBudgetStats() const noexcept
+    {
+        if (!IsValid() || !memoryBudgetEnabled_)
+            return std::nullopt;
+
+        const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+        vmaGetMemoryProperties(allocator_, &properties);
+        std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> heaps{};
+        vmaGetHeapBudgets(allocator_, heaps.data());
+
+        VulkanMemoryBudgetStats result;
+        static_assert(result.heaps.size() == VK_MAX_MEMORY_HEAPS);
+        result.heapCount = properties->memoryHeapCount;
+        for (std::uint32_t heapIndex = 0; heapIndex < result.heapCount; ++heapIndex)
+        {
+            auto& output = result.heaps[heapIndex];
+            const auto& heap = properties->memoryHeaps[heapIndex];
+            const auto& budget = heaps[heapIndex];
+            output.heapIndex = heapIndex;
+            output.heapFlags = heap.flags;
+            output.deviceLocal = (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+            output.heapSize = heap.size;
+            output.usage = budget.usage;
+            output.budget = budget.budget;
+            output.allocationCount = budget.statistics.allocationCount;
+            output.allocationBytes = budget.statistics.allocationBytes;
+            output.blockCount = budget.statistics.blockCount;
+            output.blockBytes = budget.statistics.blockBytes;
+        }
+        return result;
+    }
+
+    void VulkanAllocator::SetCurrentFrameIndex(const std::uint32_t frameIndex) noexcept
+    {
+        if (IsValid() && memoryBudgetEnabled_)
+            vmaSetCurrentFrameIndex(allocator_, frameIndex);
+    }
+
     void VulkanAllocator::Reset() noexcept
     {
         if (allocator_ != VK_NULL_HANDLE)
             vmaDestroyAllocator(allocator_);
         allocator_ = VK_NULL_HANDLE;
         device_ = VK_NULL_HANDLE;
+        memoryBudgetEnabled_ = false;
     }
 } // namespace owl::vulkan

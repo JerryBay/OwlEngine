@@ -1,5 +1,6 @@
 #pragma once
 
+#include <owl/vulkan/VulkanMemoryBudget.h>
 #include <owl/vulkan/VulkanMemoryStats.h>
 #include <owl/vulkan/VulkanResourceStats.h>
 
@@ -121,6 +122,10 @@ namespace owl::vulkan
         // Explicit allocator query, separate from cheap frame counters. No GPU wait or collection.
         // Unavailable for empty/failed owners and Clear, which has no VMA allocator.
         [[nodiscard]] std::optional<VulkanMemoryStats> QueryMemoryStats() const noexcept;
+        // VMA heap budget estimates, refreshed at frame start/WaitIdle. Also unavailable when
+        // VK_EXT_memory_budget is not enabled. No GPU submit/wait/collection in this query.
+        [[nodiscard]] std::optional<VulkanMemoryBudgetStats>
+        QueryMemoryBudgetStats() const noexcept;
         // Read-only ownership snapshot on the same window thread, with the same availability.
         [[nodiscard]] std::optional<VulkanResourceStats> QueryResourceStats() const noexcept;
 

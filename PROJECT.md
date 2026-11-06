@@ -17,7 +17,8 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   user-reported controls, drained shutdown statistics and GPU replacement LOD-0 capture. Evidence
   limits remain explicit below. M2D-1 allocator snapshots have local automated and sample R/exit
   log acceptance. M2D-2 Buffer/Image classification and retired-image byte accounting are
-  implemented and pass focused Debug validation; the additional log fields were not manually replayed.
+  implemented and pass focused Debug validation. M2D-3 heap budgets now pass focused Debug and
+  bounded Sandbox log verification; ImGui remains the next unimplemented M2D slice.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -146,14 +147,25 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     report allocation count/bytes and reserved block count/bytes across VMA heaps. Queries do not
     submit, wait or collect. Clear/empty/failed owners report unavailable. Sandbox logs startup,
     observed upload/replacement/retirement changes and post-WaitIdle values; active resources still
-    exist at that exit snapshot. Native budgets and ImGui remain later.
+    exist at that exit snapshot. ImGui remains later.
   - M2D-2 `VulkanResourceStats` reports separate Buffer/Image counts, requested bytes and VMA
     allocation bytes through an explicit optional Renderer query. Existing resource owners sum
     staging, upload destinations, geometry, frame arenas, active and retired bindings once each.
     Retired image allocation bytes are a subset of Image bytes, not an additional allocation.
     Image requested bytes cover tightly packed RGBA8 pixels across all mips. The existing Sandbox
     event logs include these fields; query calls do not submit, wait, publish or collect resources.
+  - M2D-3 optionally enables `VK_EXT_memory_budget` in Device and VMA. Allocator/Renderer expose
+    per-heap size, heap flags, device-local classification, estimated usage/budget and VMA totals.
+    VMA's cache refreshes at frame entry and successful explicit WaitIdle; queries perform no GPU
+    work or collection. Missing extension returns unavailable while allocator/resource statistics
+    continue working. Usage/budget are estimates, not guaranteed free memory or allocator totals.
 - Verified:
+  - 2026-11-06, M2D-3: VS2026 Debug build and 15 existing memory/device/frame-lifecycle cases pass
+    with real synchronization/submit-time validation, no skips and zero errors/warnings. Enabled
+    and actively disabled budget paths, native heap properties, per-heap VMA totals, moves and
+    release are covered. One final bounded GPU mip run exited 0 after 105 frames, logging two heaps
+    at startup and after WaitIdle with zero validation errors/warnings. No new independent cases
+    (153 discovered), full-suite/second-configuration repeat or manual/RenderDoc visual acceptance.
   - 2026-11-06, M2D-2: VS2026 Debug build and 11 existing memory-statistics, frame-lifecycle and
     texture-replacement cases passed with actual synchronization/submit-time validation, no skips
     and zero validation errors/warnings. Independent VMA totals match Buffer+Image counts/bytes;
@@ -405,7 +417,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 | --- | --- | --- | --- |
 | M0 Reproducible Engineering Baseline | Complete | VS2026 Debug and RelWithDebInfo build/tests pass; cross-toolchain support is defined by presets and CI | Preserve clean-clone configure, build, test, and smoke workflows |
 | M1 Vulkan Bootstrap and Frame Lifecycle | Complete for local VS2026 scope | Both configurations' CPU/GPU tests, Debug 12,124-frame synchronization-validation run, earlier RenderDoc/MCP inspection, and user visual acceptance | Met locally; retain the unverified portability and fault-injection limits above |
-| M2 GPU Resources, Memory, and Uploads | M2D-2 classification implemented; current suite has 153 cases | M2D-2 affected 11 Debug cases pass with validation; earlier M2D-1 full CTest and manual log acceptance retained | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
+| M2 GPU Resources, Memory, and Uploads | M2D-3 heap budgets implemented; current suite has 153 cases | M2D-3 affected 15 Debug cases and bounded Sandbox logs pass with validation; earlier M2D-1 full CTest and manual acceptance retained | Safe uploads/retirement with frames in flight, resource statistics, and validation-clean stress checks |
 | M3-M15 | Planned | Unverified | Follow the approved milestone roadmap and per-milestone design gates |
 
 ## Decisions and Constraints
@@ -490,6 +502,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `docs/superpowers/specs/2026-11-06-owlengine-m2d-resource-statistics-design.md`;
   `VulkanResourceStats.h`, resource-owner `ResourceStats()` methods, `VulkanTriangle`,
   `VulkanSample.cpp` and existing memory/lifecycle/replacement tests.
+- Heap budgets (M2D-3, implemented and focused Debug/log verified):
+  `docs/superpowers/specs/2026-11-06-owlengine-m2d-memory-budget-design.md`;
+  `VulkanMemoryBudget.h`, `VulkanDevice`, `VulkanAllocator`, `VulkanTriangle`, `VulkanSample.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -568,13 +583,15 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   `build/test-pruning-debug-build.log` (local, ignored).
 - M2D-2 focused synchronization validation: `build/diagnostics/m2d2-statistics-20261106/`;
   Debug build: `build/m2d2-debug-build.log` (local, ignored).
+- M2D-3 focused validation and bounded sample logs: `build/diagnostics/m2d3-budget-20261106/`;
+  Debug build: `build/m2d3-debug-build.log` (local, ignored).
 
 ## Next Work
 
-- Next: propose the next M2D slice using the verified allocator/resource snapshots. Heap-budget
-  negotiation and ImGui integration remain unimplemented and require technical proposals.
+- Next: propose a minimal ImGui debug panel using the verified allocator/resource/budget snapshots.
+  Input routing, UI render placement and backend lifetimes need a technical proposal before integration.
   Preserve completed-use collection, bounded replacement ownership, per-slot upload reuse and
   single-mip/generated-mip sampled-pixel regressions.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  heap budgets and the debug panel remain M2D. RHI and additional
+  the debug panel remains M2D. RHI and additional
   queue families remain out of scope. VS2022 validation belongs to the separate workstation.

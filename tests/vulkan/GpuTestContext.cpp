@@ -13,7 +13,7 @@ namespace owl::tests
             static_cast<void>(vkDeviceWaitIdle(device->Get()));
     }
 
-    std::optional<GpuContext> CreateGpuContext(std::string& error)
+    std::optional<GpuContext> CreateGpuContext(std::string& error, const bool enableMemoryBudget)
     {
         GpuContext result;
         result.platform = owl::platform::Platform::Create(error);
@@ -40,7 +40,7 @@ namespace owl::tests
         if (!result.selection)
             return std::nullopt;
         result.device = owl::vulkan::VulkanDevice::Create(
-            *result.selection, error, result.instance->PresentationSupport());
+            *result.selection, error, result.instance->PresentationSupport(), enableMemoryBudget);
         if (!result.device)
             return std::nullopt;
         result.allocator = owl::vulkan::VulkanAllocator::Create(

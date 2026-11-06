@@ -735,6 +735,8 @@ namespace owl::vulkan
             error = "Texture draw requires a finite scale in (0, 1] and LOD inside the mip view";
             return FrameResult::Failed;
         }
+        impl_->allocator.SetCurrentFrameIndex(
+            static_cast<std::uint32_t>(impl_->stats.submittedFrames));
         return impl_->RenderFrame(error, parameters);
     }
     TextureReplacementResult
@@ -752,13 +754,26 @@ namespace owl::vulkan
     bool VulkanTriangle::WaitIdle(std::string& error)
     {
         error.clear();
-        return !impl_ || impl_->WaitIdle(error);
+        if (!impl_)
+            return true;
+        if (!impl_->WaitIdle(error))
+            return false;
+        impl_->allocator.SetCurrentFrameIndex(
+            static_cast<std::uint32_t>(impl_->stats.submittedFrames));
+        return true;
     }
     std::optional<VulkanMemoryStats> VulkanTriangle::QueryMemoryStats() const noexcept
     {
         if (!IsValid())
             return std::nullopt;
         return impl_->allocator.QueryMemoryStats();
+    }
+
+    std::optional<VulkanMemoryBudgetStats> VulkanTriangle::QueryMemoryBudgetStats() const noexcept
+    {
+        if (!IsValid())
+            return std::nullopt;
+        return impl_->allocator.QueryMemoryBudgetStats();
     }
 
     std::optional<VulkanResourceStats> VulkanTriangle::QueryResourceStats() const noexcept

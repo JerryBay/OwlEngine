@@ -30,9 +30,11 @@ namespace owl::vulkan
         VulkanDevice(VulkanDevice&& other) noexcept;
         VulkanDevice& operator=(VulkanDevice&& other) noexcept;
 
+        // Disable optional budget support to exercise the compatibility path in diagnostics.
         [[nodiscard]] static std::optional<VulkanDevice>
         Create(const VulkanDeviceSelection& selection, std::string& error,
-               const detail::PresentationSupportCapabilities& presentationSupport = {});
+               const detail::PresentationSupportCapabilities& presentationSupport = {},
+               bool enableMemoryBudget = true);
 
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] VkDevice Get() const noexcept;
@@ -40,6 +42,7 @@ namespace owl::vulkan
         [[nodiscard]] VkQueue GraphicsQueue() const noexcept;
         [[nodiscard]] VkQueue PresentQueue() const noexcept;
         [[nodiscard]] bool HasPresentFences() const noexcept;
+        [[nodiscard]] bool HasMemoryBudget() const noexcept;
         [[nodiscard]] const detail::QueueFamilySelection& QueueFamilies() const noexcept;
 
     private:
@@ -51,5 +54,6 @@ namespace owl::vulkan
         VkQueue presentQueue_ = VK_NULL_HANDLE;
         detail::QueueFamilySelection queueFamilies_{};
         detail::SwapchainMaintenance swapchainMaintenance_ = detail::SwapchainMaintenance::None;
+        bool memoryBudgetEnabled_ = false;
     };
 } // namespace owl::vulkan

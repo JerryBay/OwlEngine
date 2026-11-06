@@ -17,6 +17,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -328,6 +329,20 @@ TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][d
     REQUIRE(device.has_value());
     REQUIRE(device->IsValid());
     CHECK(device->PhysicalDevice() == selection->Get());
+    std::uint32_t extensionCount = 0;
+    REQUIRE(vkEnumerateDeviceExtensionProperties(selection->Get(), nullptr, &extensionCount,
+                                                 nullptr) == VK_SUCCESS);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    REQUIRE(vkEnumerateDeviceExtensionProperties(selection->Get(), nullptr, &extensionCount,
+                                                 extensions.data()) == VK_SUCCESS);
+    extensions.resize(extensionCount);
+    const bool budgetSupported = std::ranges::any_of(
+        extensions,
+        [](const auto& extension)
+        {
+            return std::string_view{extension.extensionName} == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+        });
+    CHECK(device->HasMemoryBudget() == budgetSupported);
     CHECK(error.empty());
     REQUIRE(device->GraphicsQueue() != VK_NULL_HANDLE);
     REQUIRE(device->PresentQueue() != VK_NULL_HANDLE);
@@ -347,16 +362,19 @@ TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][d
     const VkQueue originalGraphicsQueue = device->GraphicsQueue();
     const VkQueue originalPresentQueue = device->PresentQueue();
     const bool originalHasPresentFences = device->HasPresentFences();
+    const bool originalHasMemoryBudget = device->HasMemoryBudget();
     owl::vulkan::VulkanDevice moved{std::move(*device)};
     CHECK_FALSE(device->IsValid());
     CHECK(device->PhysicalDevice() == VK_NULL_HANDLE);
     CHECK(device->GraphicsQueue() == VK_NULL_HANDLE);
     CHECK(device->PresentQueue() == VK_NULL_HANDLE);
     CHECK_FALSE(device->HasPresentFences());
+    CHECK_FALSE(device->HasMemoryBudget());
     CHECK_FALSE(device->QueueFamilies().IsComplete());
     REQUIRE(moved.Get() == originalDevice);
     CHECK(moved.PhysicalDevice() == selection->Get());
     CHECK(moved.HasPresentFences() == originalHasPresentFences);
+    CHECK(moved.HasMemoryBudget() == originalHasMemoryBudget);
     CHECK(vkDeviceWaitIdle(moved.Get()) == VK_SUCCESS);
 
     auto destination =
@@ -369,10 +387,12 @@ TEST_CASE("Vulkan device and queues bootstrap locally", "[vulkan][integration][d
     CHECK(moved.GraphicsQueue() == VK_NULL_HANDLE);
     CHECK(moved.PresentQueue() == VK_NULL_HANDLE);
     CHECK_FALSE(moved.HasPresentFences());
+    CHECK_FALSE(moved.HasMemoryBudget());
     CHECK_FALSE(moved.QueueFamilies().IsComplete());
     REQUIRE(destination->Get() == originalDevice);
     CHECK(destination->PhysicalDevice() == selection->Get());
     CHECK(destination->HasPresentFences() == originalHasPresentFences);
+    CHECK(destination->HasMemoryBudget() == originalHasMemoryBudget);
     CHECK(destination->GraphicsQueue() == originalGraphicsQueue);
     CHECK(destination->PresentQueue() == originalPresentQueue);
     CHECK(destination->QueueFamilies().graphicsFamily == selection->QueueFamilies().graphicsFamily);
