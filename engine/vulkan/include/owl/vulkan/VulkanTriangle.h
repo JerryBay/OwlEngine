@@ -130,6 +130,7 @@ namespace owl::vulkan
         [[nodiscard]] std::optional<VulkanResourceStats> QueryResourceStats() const noexcept;
 
     private:
+        friend class VulkanDebugUiAccess;
         struct Impl;
         explicit VulkanTriangle(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

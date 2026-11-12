@@ -1,3 +1,5 @@
+find_package(imgui CONFIG REQUIRED)
+
 # vcpkg's native deployer skips delay imports; the PowerShell deployer includes them.
 # This directory-local setting affects only the Sandbox target.
 set(VCPKG_USE_LEGACY_APPLOCAL ON)
@@ -5,6 +7,8 @@ add_executable(OwlSandbox)
 
 target_sources(OwlSandbox PRIVATE
     src/main.cpp
+    src/DebugPanel.cpp
+    src/DebugPanel.h
     src/ClearSample.cpp
     src/ClearSample.h
     src/SmokeSample.cpp
@@ -21,6 +25,12 @@ target_link_libraries(OwlSandbox PRIVATE
     OwlFoundation
     OwlPlatform
     OwlVulkan
+    imgui::imgui
+)
+
+target_include_directories(OwlSandbox PRIVATE
+    "${PROJECT_SOURCE_DIR}/engine/platform/src/sdl"
+    "${PROJECT_SOURCE_DIR}/engine/vulkan/src"
 )
 
 if(MSVC)

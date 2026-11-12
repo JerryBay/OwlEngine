@@ -1,5 +1,7 @@
 #include <owl/platform/Platform.h>
 
+#include "SDLEventAccess.h"
+
 #include <SDL3/SDL.h>
 
 #include <string>
@@ -66,9 +68,16 @@ namespace owl::platform
 
     EventPumpResult Platform::PumpEvents() const noexcept
     {
+        return SDLEventAccess::Pump(nullptr, nullptr);
+    }
+
+    EventPumpResult SDLEventAccess::Pump(const Observer observer, void* userdata) noexcept
+    {
         SDL_Event event{};
         while (SDL_PollEvent(&event))
         {
+            if (observer != nullptr)
+                observer(event, userdata);
             if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             {
                 return EventPumpResult::Quit;

@@ -18,7 +18,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
   limits remain explicit below. M2D-1 allocator snapshots have local automated and sample R/exit
   log acceptance. M2D-2 Buffer/Image classification and retired-image byte accounting are
   implemented and pass focused Debug validation. M2D-3 heap budgets now pass focused Debug and
-  bounded Sandbox log verification; ImGui remains the next unimplemented M2D slice.
+  bounded Sandbox log verification. M2D-4's ImGui panel is implemented and locally accepted on
+  VS2026 Debug; focused synchronization validation, user-reported UI checks and a bounded API
+  trace cover its integration. Full M2 evidence consolidation remains next.
 - Current implementation boundary: M1 Tasks 1-8 are complete and accepted on the local VS2026
   workstation. The maintained buffer/upload path uses VMA with explicit CPU access intent;
   exact GPU copy/readback and staged triangle geometry remain. Both configurations pass local
@@ -147,7 +149,7 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     report allocation count/bytes and reserved block count/bytes across VMA heaps. Queries do not
     submit, wait or collect. Clear/empty/failed owners report unavailable. Sandbox logs startup,
     observed upload/replacement/retirement changes and post-WaitIdle values; active resources still
-    exist at that exit snapshot. ImGui remains later.
+    exist at that exit snapshot. These VMA counters exclude the later ImGui backend allocations.
   - M2D-2 `VulkanResourceStats` reports separate Buffer/Image counts, requested bytes and VMA
     allocation bytes through an explicit optional Renderer query. Existing resource owners sum
     staging, upload destinations, geometry, frame arenas, active and retired bindings once each.
@@ -159,7 +161,27 @@ runtime evidence, and approved designs take precedence if they conflict with thi
     VMA's cache refreshes at frame entry and successful explicit WaitIdle; queries perform no GPU
     work or collection. Missing extension returns unavailable while allocator/resource statistics
     continue working. Usage/budget are estimates, not guaranteed free memory or allocator totals.
+  - M2D-4: `texture-mips` has a sample-owned ImGui context/SDL3 backend and a private renderer-owned
+    Vulkan backend/pool. Platform forwards events through a private observer; sample key edges are
+    tracked even when UI captures input. UI draws follow the scene with LOAD/STORE and a color
+    dependency, sharing the two fenced frame slots and submission. Minimized iterations do not
+    advance UI frames. Budget display refreshes every 250 ms; VMA totals explicitly exclude ImGui.
+    Official backend allocation/font-growth costs are accepted. Its native Vulkan failures print
+    VkResult and abort, as explicitly confirmed; ordinary integration checks still return errors.
 - Verified:
+  - 2026-11-12, M2D-4: VS2026 Debug build; 7 affected event/frame-lifecycle cases, 58,284 assertions,
+    real Khronos synchronization/submit-time validation, no skips or validation errors/warnings.
+    The existing GPU-mip replacement case now includes UI, moves, resize/minimize/restore and
+    both present policies. Help passed; Smoke exited 0 and loaded no vulkan-1.dll.
+    User confirmed panel/scene, controls, keyboard capture/release, collapse and window operations.
+    The sample logged normal shutdown after 3,785 submits/presents, matching completed serial,
+    16 replacements and zero pending uploads/retirements. Its log records only one swapchain
+    generation, so actual extent recreation evidence comes from automated lifecycle tests.
+    API trace frames 120-179 contain 180 indexed draws, 120 rendering scopes, no memory allocation,
+    resource creation or queue-idle waits. Startup frames 0-3 include one font-upload queue wait.
+    The traced run has zero validation errors and two explained loader warnings about explicitly
+    enabling api_dump. Its wrapper did not retain a numeric exit code; normal shutdown is log
+    evidence. No full suite, second configuration, OOM/device-loss injection or format-change test.
   - 2026-11-06, M2D-3: VS2026 Debug build and 15 existing memory/device/frame-lifecycle cases pass
     with real synchronization/submit-time validation, no skips and zero errors/warnings. Enabled
     and actively disabled budget paths, native heap properties, per-heap VMA totals, moves and
@@ -505,6 +527,9 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 - Heap budgets (M2D-3, implemented and focused Debug/log verified):
   `docs/superpowers/specs/2026-11-06-owlengine-m2d-memory-budget-design.md`;
   `VulkanMemoryBudget.h`, `VulkanDevice`, `VulkanAllocator`, `VulkanTriangle`, `VulkanSample.cpp`.
+- Diagnostics panel (M2D-4, confirmed, implemented and locally accepted):
+  `docs/superpowers/specs/2026-11-09-owlengine-m2d-imgui-panel-design.md`;
+  `DebugPanel`, `SDLEventAccess`, `VulkanDebugUiAccess`, `VulkanImGuiRenderer` and `FrameTests.cpp`.
 - Completed M1 design/plan: `docs/superpowers/specs/2026-08-19-owlengine-m1-design.md` and
   `docs/superpowers/plans/2026-08-19-owlengine-m1.md`
 - Build documentation: `README.md` and `docs/building/windows.md`
@@ -588,10 +613,11 @@ runtime evidence, and approved designs take precedence if they conflict with thi
 
 ## Next Work
 
-- Next: propose a minimal ImGui debug panel using the verified allocator/resource/budget snapshots.
-  Input routing, UI render placement and backend lifetimes need a technical proposal before integration.
+- Next: consolidate M2 acceptance against the M2 design using existing scoped evidence, identify
+  actual gaps, then propose the first M3 command/submission/synchronization slice. Do not repeat
+  broad regression solely to rewrite the acceptance record.
   Preserve completed-use collection, bounded replacement ownership, per-slot upload reuse and
   single-mip/generated-mip sampled-pixel regressions.
 - Preserve Clear/Smoke and staged Triangle regressions. Keep the graphics queue initially;
-  the debug panel remains M2D. RHI and additional
-  queue families remain out of scope. VS2022 validation belongs to the separate workstation.
+  RHI and additional queue families remain out of scope until a confirmed later design.
+  VS2022 validation belongs to the separate workstation.

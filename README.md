@@ -54,7 +54,7 @@ now includes user-reported controls, drained replacement counters and GPU LOD-0 
 project record distinguishes missing CPU replacement captures and window-recreation evidence.
 M2D-1 now exposes explicit VMA allocation/block statistics and event-triggered Sandbox logs.
 The M2D-1 checkpoint passed 165/165 tests in both VS2026 configurations with synchronization
-validation and zero errors/warnings. A later test cleanup reduced the current suite to 153 cases;
+validation and zero errors/warnings. A later test cleanup reduced that suite to 153 cases;
 the affected 14 Debug cases passed with validation. User-confirmed GPU/CPU mip runs returned to their startup live-allocation
 baseline after 21/14 replacements, with normal exit and zero validation errors/warnings.
 M2D-2 adds Buffer/Image counts, requested/allocation bytes and a retired-image subset to those logs.
@@ -62,10 +62,16 @@ Its 11 affected existing Debug cases passed with synchronization validation and 
 no full-suite or manual sample replay was repeated.
 M2D-3 adds optional device memory budgets and per-heap statistics. Its 15 affected existing Debug
 cases and a bounded Sandbox log run passed with synchronization validation and zero errors/warnings.
+M2D-4 adds an ImGui diagnostics panel to `texture-mips`: frame/upload/retirement counters,
+Buffer/Image and VMA statistics, and optional heap budgets. Seven affected Debug cases passed
+with actual synchronization validation and zero errors/warnings; user-reported UI acceptance
+and a bounded steady-state Vulkan trace also passed. Only one event case was added; the UI
+lifecycle extends the existing GPU-mip test.
 See the
 [memory statistics design](docs/superpowers/specs/2026-11-05-owlengine-m2d-memory-statistics-design.md),
 [resource classification design](docs/superpowers/specs/2026-11-06-owlengine-m2d-resource-statistics-design.md),
 [heap budget design](docs/superpowers/specs/2026-11-06-owlengine-m2d-memory-budget-design.md),
+[debug panel design and evidence](docs/superpowers/specs/2026-11-09-owlengine-m2d-imgui-panel-design.md),
 [M2 design](docs/superpowers/specs/2026-09-23-owlengine-m2-design.md),
 [textured quad plan](docs/superpowers/plans/2026-09-30-owlengine-m2b-textured-quad.md), and
 [project status](PROJECT.md) for current verification and remaining limits.
@@ -98,6 +104,13 @@ ctest --preset windows-vs2022-debug
 ./build/windows-vs2022/bin/Debug/OwlSandbox.exe --sample texture-mips
 # Use --sample texture-mips-cpu to compare CPU-generated mips.
 ```
+
+`texture-mips` also displays a movable, collapsible diagnostics panel. Ctrl+Tab gives the UI
+keyboard focus; sample shortcuts are gated while it captures input. Click **Return keyboard to
+sample** to resume them. Escape always exits. Heap values refresh every 250 ms. The section
+**Renderer VMA (excludes ImGui)** counts only Owl's allocator: the official ImGui backend owns
+separate GPU allocations. First use or UI/font growth can allocate and wait for a font upload;
+steady-state reuse does not imply that every possible UI update is allocation-free.
 
 The Vulkan samples print `VMA memory` at startup and after WaitIdle on exit. In either mip sample,
 press R to observe allocation changes during upload, replacement and retirement. Live allocation

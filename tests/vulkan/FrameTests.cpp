@@ -1,8 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "SDLEventAccess.h"
 #include "SDLWindowAccess.h"
+#include "VulkanDebugUiAccess.h"
 #include "VulkanFrame.h"
 #include <SDL3/SDL.h>
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
 #include <owl/foundation/Log.h>
 #include <owl/platform/Platform.h>
 #include <owl/vulkan/VulkanTriangle.h>
@@ -235,6 +239,53 @@ TEST_CASE("Geometry streaming rejects incompatible sample options before Vulkan 
 
 namespace
 {
+    // Reuses the real frame-lifecycle case, including moves and both present policies.
+    // Declare before the renderer so its borrowed context outlives GPU teardown.
+    struct TestDebugUi
+    {
+        ImGuiContext* context = nullptr;
+        std::uint64_t frames = 0;
+        ~TestDebugUi()
+        {
+            if (context != nullptr)
+            {
+                ImGui::SetCurrentContext(context);
+                ImGui_ImplSDL3_Shutdown();
+                ImGui::DestroyContext(context);
+            }
+        }
+        void Initialize(owl::platform::Window& window)
+        {
+            context = ImGui::CreateContext();
+            ImGui::GetIO().IniFilename = nullptr;
+            ImGui::GetIO().LogFilename = nullptr;
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+            REQUIRE(ImGui_ImplSDL3_InitForVulkan(owl::platform::SDLWindowAccess::Get(window)));
+        }
+        static void Event(const SDL_Event& event, void*) noexcept
+        {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+        }
+        static void Build(void* userdata)
+        {
+            auto& ui = *static_cast<TestDebugUi*>(userdata);
+            ImGui_ImplSDL3_NewFrame();
+            // The backend receives input even while the UI claims the keyboard.
+            const bool capture = (ui.frames % 4) < 2;
+            ImGui::SetNextFrameWantCaptureKeyboard(capture);
+            ImGui::NewFrame();
+            CHECK(ImGui::GetIO().WantCaptureKeyboard == capture);
+            ImGui::SetNextWindowPos({8.0F, 8.0F});
+            ImGui::SetNextWindowSize({300.0F, 180.0F});
+            ImGui::SetNextWindowCollapsed(ui.frames % 40 < 10);
+            if (ImGui::Begin("Lifecycle diagnostics"))
+                ImGui::Text("Frame %llu", static_cast<unsigned long long>(ui.frames));
+            ImGui::End();
+            ImGui::Render();
+            ++ui.frames;
+        }
+    };
+
     enum class SampleMode
     {
         Clear,
@@ -303,10 +354,23 @@ namespace
             }
         }
         options.streamTextureGeometry = streamGeometry;
+        TestDebugUi debugUi;
+        const bool withUi = mode == SampleMode::TextureMips && streamGeometry && replaceTextures;
+        if (withUi)
+            debugUi.Initialize(*window);
         auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error, options);
         INFO(error);
         REQUIRE(renderer);
         REQUIRE(renderer->IsValid());
+        if (withUi)
+        {
+            CHECK_FALSE(owl::vulkan::VulkanDebugUiAccess::Attach(
+                *renderer, nullptr, TestDebugUi::Build, &debugUi, error));
+            REQUIRE(owl::vulkan::VulkanDebugUiAccess::Attach(*renderer, debugUi.context,
+                                                             TestDebugUi::Build, &debugUi, error));
+            CHECK_FALSE(owl::vulkan::VulkanDebugUiAccess::Attach(
+                *renderer, debugUi.context, TestDebugUi::Build, &debugUi, error));
+        }
         const auto memoryBaseline = renderer->QueryMemoryStats();
         const auto budgetBaseline = renderer->QueryMemoryBudgetStats();
         const auto checkResourceTotals = [&]
@@ -466,7 +530,10 @@ namespace
             while (renderer->Stats().presentedFrames < target &&
                    std::chrono::steady_clock::now() < deadline)
             {
-                REQUIRE(platform->PumpEvents() == owl::platform::EventPumpResult::Continue);
+                const auto pump =
+                    withUi ? owl::platform::SDLEventAccess::Pump(TestDebugUi::Event, nullptr)
+                           : platform->PumpEvents();
+                REQUIRE(pump == owl::platform::EventPumpResult::Continue);
                 owl::vulkan::TextureDrawParameters parameters;
                 if (mode == SampleMode::TextureMips || mode == SampleMode::TextureMipsCpu)
                 {
@@ -485,6 +552,8 @@ namespace
                 INFO(error);
                 REQUIRE(result != owl::vulkan::FrameResult::Failed);
                 const auto after = renderer->Stats();
+                if (withUi)
+                    CHECK(debugUi.frames == after.submittedFrames);
                 if (replaceTextures)
                 {
                     CHECK(after.pendingTextureRetirements <= 4);
@@ -608,6 +677,8 @@ namespace
         for (int frame = 0; frame < 4; ++frame)
             CHECK(renderer->RenderFrame(error) == owl::vulkan::FrameResult::Deferred);
         CHECK(renderer->Stats().submittedFrames == beforeMinimized.submittedFrames);
+        if (withUi)
+            CHECK(debugUi.frames == beforeMinimized.submittedFrames);
         CHECK(renderer->Stats().submittedSerial == beforeMinimized.submittedSerial);
         CHECK(renderer->Stats().completedSerial == beforeMinimized.completedSerial);
         CHECK(renderer->Stats().swapchainGeneration == beforeMinimized.swapchainGeneration);
@@ -637,6 +708,8 @@ namespace
         if (replaceTextures)
             requestReplacement(); // Destructor must drain an accepted upload without another frame.
         renderer.reset();
+        if (withUi)
+            CHECK(ImGui::GetIO().BackendRendererUserData == nullptr);
         CHECK(window->IsValid());
     }
 } // namespace

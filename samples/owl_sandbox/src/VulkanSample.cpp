@@ -1,4 +1,5 @@
 #include "VulkanSample.h"
+#include "DebugPanel.h"
 
 #include <owl/foundation/Log.h>
 #include <owl/platform/Platform.h>
@@ -83,12 +84,13 @@ namespace owl::sandbox
         public:
             [[nodiscard]] bool UpdateTexture(const owl::platform::Platform& platform,
                                              owl::vulkan::VulkanTriangle& renderer,
-                                             std::string& error)
+                                             const bool captureKeyboard, std::string& error)
             {
                 const bool down = platform.IsKeyDown(owl::platform::Key::R);
                 const bool pressed = down && !replacementKeyDown_;
+                // Track edges even while captured; releasing UI focus must not replay a held key.
                 replacementKeyDown_ = down;
-                if (!pressed)
+                if (!pressed || captureKeyboard)
                     return true;
                 // Sample-owned palettes. Each accepted request creates a new native image/set.
                 std::array<std::byte, 64 * 64 * 4> pixels;
@@ -119,7 +121,8 @@ namespace owl::sandbox
             }
 
             [[nodiscard]] owl::vulkan::TextureDrawParameters
-            Update(const owl::platform::Platform& platform, const double elapsedSeconds)
+            Update(const owl::platform::Platform& platform, const double elapsedSeconds,
+                   const bool captureKeyboard)
             {
                 constexpr std::array keys{
                     owl::platform::Key::Digit0, owl::platform::Key::Digit1,
@@ -132,21 +135,21 @@ namespace owl::sandbox
                 for (std::size_t index = 0; index < keys.size(); ++index)
                 {
                     down[index] = platform.IsKeyDown(keys[index]);
-                    if (index < 7 && down[index] && !previousDown_[index])
+                    if (!captureKeyboard && index < 7 && down[index] && !previousDown_[index])
                     {
                         explicitLod_ = static_cast<float>(index);
                     }
                 }
 
                 bool startedAutomaticZoom = false;
-                if (down[7] && !previousDown_[7])
+                if (!captureKeyboard && down[7] && !previousDown_[7])
                 {
                     explicitLod_.reset();
                     automaticSeconds_ = 0.0;
                     paused_ = false;
                     startedAutomaticZoom = true;
                 }
-                if (down[8] && !previousDown_[8] && !explicitLod_)
+                if (!captureKeyboard && down[8] && !previousDown_[8] && !explicitLod_)
                 {
                     paused_ = !paused_;
                 }
@@ -207,6 +210,8 @@ namespace owl::sandbox
 
             const bool mipSample =
                 options.textureMipMode != owl::vulkan::TextureMipMode::SingleLevel;
+            const bool showDebugPanel =
+                options.textureMipMode == owl::vulkan::TextureMipMode::Generate;
 
             std::string error;
             auto platform = owl::platform::Platform::Create(error);
@@ -251,11 +256,24 @@ namespace owl::sandbox
                 return 3;
             }
 
+            // Context/SDL backend must outlive the renderer's GPU backend, then release before
+            // Window.
+            DebugPanel debugPanel;
+            if (showDebugPanel && !debugPanel.Initialize(*window, error))
+            {
+                LogMessage(LogLevel::Error, "Debug UI", error);
+                return 4;
+            }
             // Reverse local destruction keeps the borrowed window alive through Vulkan teardown.
             auto renderer = owl::vulkan::VulkanTriangle::Create(*window, error, std::move(options));
             if (!renderer)
             {
                 LogMessage(LogLevel::Error, name, error);
+                return 4;
+            }
+            if (showDebugPanel && !debugPanel.Attach(*renderer, error))
+            {
+                LogMessage(LogLevel::Error, "Debug UI", error);
                 return 4;
             }
 
@@ -287,13 +305,15 @@ namespace owl::sandbox
             MipSampleControls mipControls;
             auto previousFrame = std::chrono::steady_clock::now();
             std::string currentTitle;
-            while (platform->PumpEvents() == owl::platform::EventPumpResult::Continue)
+            while ((showDebugPanel ? debugPanel.PumpEvents() : platform->PumpEvents()) ==
+                   owl::platform::EventPumpResult::Continue)
             {
                 const auto frameStart = std::chrono::steady_clock::now();
+                const bool captureKeyboard = showDebugPanel && debugPanel.WantsKeyboard();
                 owl::vulkan::TextureDrawParameters drawParameters;
                 if (mipSample)
                 {
-                    if (!mipControls.UpdateTexture(*platform, *renderer, error))
+                    if (!mipControls.UpdateTexture(*platform, *renderer, captureKeyboard, error))
                     {
                         LogMessage(LogLevel::Error, name, error);
                         return 4;
@@ -302,7 +322,7 @@ namespace owl::sandbox
                     logMemoryChanges();
                     const double elapsedSeconds =
                         std::chrono::duration<double>{frameStart - previousFrame}.count();
-                    drawParameters = mipControls.Update(*platform, elapsedSeconds);
+                    drawParameters = mipControls.Update(*platform, elapsedSeconds, captureKeyboard);
                     const auto title = mipControls.Title(drawParameters, renderer->Stats());
                     if (title != currentTitle)
                     {

@@ -1,5 +1,6 @@
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 add_library(OwlVulkan STATIC)
 
@@ -27,6 +28,9 @@ target_sources(OwlVulkan PRIVATE
     src/VulkanFrame.h
     src/VulkanInstance.cpp
     src/VulkanInstance.h
+    src/VulkanDebugUiAccess.h
+    src/VulkanImGuiRenderer.cpp
+    src/VulkanImGuiRenderer.h
     src/VulkanImage.cpp
     src/VulkanImage.h
     src/VulkanImageUpload.cpp
@@ -65,6 +69,7 @@ target_link_libraries(OwlVulkan PRIVATE
     OwlPlatform
     Vulkan::Vulkan
     GPUOpen::VulkanMemoryAllocator
+    imgui::imgui
 )
 
 target_compile_definitions(OwlVulkan PRIVATE

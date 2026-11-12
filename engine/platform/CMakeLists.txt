@@ -6,6 +6,7 @@ target_sources(OwlPlatform PRIVATE
     include/owl/platform/Platform.h
     include/owl/platform/Window.h
     src/sdl/SDLWindowAccess.h
+    src/sdl/SDLEventAccess.h
     src/sdl/Platform.cpp
     src/sdl/Window.cpp
 )

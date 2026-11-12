@@ -4,6 +4,7 @@
 #include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 #include "VulkanFrame.h"
+#include "VulkanImGuiRenderer.h"
 #include "VulkanInstance.h"
 #include "VulkanSurface.h"
 #include "VulkanSwapchain.h"
@@ -40,6 +41,7 @@ namespace owl::vulkan
         VulkanSubmissionProgress submissionProgress;
         VulkanTrianglePipeline triangle;
         VulkanTexturedQuadPipeline texture;
+        VulkanImGuiRenderer debugUi;
         SampleMode mode = SampleMode::Clear;
         VulkanTriangleStats stats;
         VkExtent2D lastRequestedExtent{};
@@ -324,6 +326,11 @@ namespace owl::vulkan
                 failure = error;
                 return SwapchainUpdateResult::Failed;
             }
+            if (!Check(debugUi.SetColorFormat(instance.Get(), device,
+                                              swapchain.SurfaceFormat().format,
+                                              static_cast<std::uint32_t>(frames.slots.size())),
+                       "Initialize ImGui Vulkan pipeline", error))
+                return SwapchainUpdateResult::Failed;
             frames.ResetPresentResources();
             if (!frames.CreatePresentResources(swapchain.Images().size(), device.HasPresentFences(),
                                                error))
@@ -405,7 +412,7 @@ namespace owl::vulkan
                 .pImageMemoryBarriers = &barrier,
             };
             vkCmdPipelineBarrier2(slot.commandBuffer, &dependency);
-            const VkRenderingAttachmentInfo attachment{
+            VkRenderingAttachmentInfo attachment{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                 .imageView = swapchain.ImageViews()[imageIndex],
                 .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -432,6 +439,19 @@ namespace owl::vulkan
                     texture.RecordDraw(slot.commandBuffer, swapchain.Extent(), parameters);
             }
             vkCmdEndRendering(slot.commandBuffer);
+            if (debugUi.IsAttached())
+            {
+                // The UI loads/blends the scene color in a separate dynamic-rendering scope.
+                barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                barrier.dstAccessMask =
+                    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                vkCmdPipelineBarrier2(slot.commandBuffer, &dependency);
+                attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                vkCmdBeginRendering(slot.commandBuffer, &rendering);
+                debugUi.RecordDraw(slot.commandBuffer);
+                vkCmdEndRendering(slot.commandBuffer);
+            }
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
             barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -524,7 +544,15 @@ namespace owl::vulkan
             slot.acquisitionPending = true;
             recreateRequested = acquire == VK_SUBOPTIMAL_KHR;
             auto& image = frames.images[imageIndex];
-            if (!WaitPresent(image, error) || !RecordFrame(slot, imageIndex, error, parameters))
+            if (!WaitPresent(image, error))
+                return FrameResult::Failed;
+            if (debugUi.IsAttached() && !debugUi.BuildFrame(error))
+            {
+                failed = true;
+                failure = error;
+                return FrameResult::Failed;
+            }
+            if (!RecordFrame(slot, imageIndex, error, parameters))
                 return FrameResult::Failed;
 
             const auto nextSerial =
@@ -613,6 +641,17 @@ namespace owl::vulkan
             return FrameResult::Presented;
         }
     };
+    bool VulkanDebugUiAccess::Attach(VulkanTriangle& renderer, ImGuiContext* context,
+                                     const BuildFrame builder, void* userdata, std::string& error)
+    {
+        if (!renderer.IsValid() || renderer.impl_->stats.swapchainGeneration != 0)
+        {
+            error = "Debug UI must attach to a valid renderer before its first drawable frame";
+            return false;
+        }
+        return renderer.impl_->debugUi.Attach(context, builder, userdata, error);
+    }
+
     VulkanTriangle::VulkanTriangle() noexcept = default;
     VulkanTriangle::~VulkanTriangle() = default;
     VulkanTriangle::VulkanTriangle(VulkanTriangle&&) noexcept = default;
